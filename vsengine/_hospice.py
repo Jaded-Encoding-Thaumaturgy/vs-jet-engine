@@ -100,7 +100,7 @@ def _collectstage2(phase: Literal["start", "stop"], _: dict[str, int]) -> None:
     with lock:
         for ident in tuple(stage2):
             if _is_core_still_used(ident):
-                logger.warn(f"Core is still in use in stage 2. ID:{ident}")
+                logger.warning(f"Core is still in use in stage 2. ID:{ident}")
                 continue
 
             stage2.remove(ident)
