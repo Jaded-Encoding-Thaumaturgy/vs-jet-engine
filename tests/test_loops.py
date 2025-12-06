@@ -4,18 +4,15 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import queue
-import unittest
 import threading
-from concurrent.futures import Future, CancelledError
+import unittest
+from concurrent.futures import CancelledError, Future
 
 import vapoursynth
 
 from vsengine._testutils import forcefully_unregister_policy
+from vsengine.loops import Cancelled, EventLoop, _NoEventLoop, from_thread, get_loop, set_loop, to_thread
 from vsengine.policy import Policy, ThreadLocalStore
-
-from vsengine.loops import _NoEventLoop, Cancelled, from_thread, get_loop, set_loop
-from vsengine.loops import to_thread, from_thread
-from vsengine.loops import EventLoop
 
 
 class FailingEventLoop:
@@ -29,6 +26,7 @@ class SomeOtherLoop:
 
     def detach(self):
         pass
+
 
 class SpinLoop(EventLoop):
     def __init__(self) -> None:
@@ -60,17 +58,13 @@ class SpinLoop(EventLoop):
 
 
 class NoLoopTest(unittest.TestCase):
-
-
     def test_wrap_cancelled_converts_the_exception(self) -> None:
         loop = _NoEventLoop()
-        with self.assertRaises(CancelledError):
-            with loop.wrap_cancelled():
-                raise Cancelled
+        with self.assertRaises(CancelledError), loop.wrap_cancelled():
+            raise Cancelled
 
 
 class LoopApiTest(unittest.TestCase):
-
     def tearDown(self) -> None:
         forcefully_unregister_policy()
 
@@ -102,11 +96,10 @@ class LoopApiTest(unittest.TestCase):
             return vapoursynth.get_current_environment()
 
         try:
-            with Policy(ThreadLocalStore()) as p:
-                with p.new_environment() as env1:
-                    with env1.use():
-                        fut = from_thread(test)
-                    self.assertEqual(fut.result(timeout=0.1), env1.vs_environment)
+            with Policy(ThreadLocalStore()) as p, p.new_environment() as env1:
+                with env1.use():
+                    fut = from_thread(test)
+                self.assertEqual(fut.result(timeout=0.1), env1.vs_environment)
         finally:
             loop.stop()
             thr.join()
@@ -132,11 +125,10 @@ class LoopApiTest(unittest.TestCase):
         def test():
             return vapoursynth.get_current_environment()
 
-        with Policy(ThreadLocalStore()) as p:
-            with p.new_environment() as env1:
-                with env1.use():
-                    fut = to_thread(test)
-                self.assertEqual(fut.result(timeout=0.1), env1.vs_environment)
+        with Policy(ThreadLocalStore()) as p, p.new_environment() as env1:
+            with env1.use():
+                fut = to_thread(test)
+            self.assertEqual(fut.result(timeout=0.1), env1.vs_environment)
 
     def test_loop_to_thread_does_not_require_environment(self):
         def test():
@@ -144,4 +136,3 @@ class LoopApiTest(unittest.TestCase):
 
         fut = to_thread(test)
         fut.result(timeout=0.1)
-

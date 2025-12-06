@@ -2,17 +2,14 @@
 # Copyright (C) 2022  cid-chan
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
-import unittest
-
 import concurrent.futures as futures
+import unittest
 from contextvars import copy_context
 
-from vsengine.policy import GlobalStore, ThreadLocalStore, ContextVarStore 
-from vsengine.policy import EnvironmentStore
+from vsengine.policy import ContextVarStore, EnvironmentStore, GlobalStore, ThreadLocalStore
 
 
 class BaseStoreTest:
-
     def create_store(self) -> EnvironmentStore:
         raise NotImplementedError
 
@@ -34,13 +31,11 @@ class BaseStoreTest:
 
 
 class TestGlobalStore(BaseStoreTest, unittest.TestCase):
-
     def create_store(self) -> EnvironmentStore:
         return GlobalStore()
 
 
 class TestThreadLocalStore(BaseStoreTest, unittest.TestCase):
-
     def create_store(self) -> EnvironmentStore:
         return ThreadLocalStore()
 
@@ -57,7 +52,6 @@ class TestThreadLocalStore(BaseStoreTest, unittest.TestCase):
 
 
 class TestContextVarStore(BaseStoreTest, unittest.TestCase):
-
     def create_store(self) -> EnvironmentStore:
         return ContextVarStore("store_test")
 
@@ -81,7 +75,7 @@ class TestContextVarStore(BaseStoreTest, unittest.TestCase):
         ctx = copy_context()
         ctx.run(context, None, 1)
         self.assertEqual(self.store.get_current_environment(), None)
-        
+
         self.store.set_current_environment(2)
         self.assertEqual(self.store.get_current_environment(), 2)
         ctx.run(context, 1, 3)

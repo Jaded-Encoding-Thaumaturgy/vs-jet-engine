@@ -4,29 +4,20 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import pathlib
+
 import pytest
-from vsengine.policy import Policy, GlobalStore
+
 from vsengine._hospice import any_alive, freeze
+from vsengine.policy import GlobalStore, Policy
 
+DEFAULT_STAGES = ("initial-core", "reloaded-core")
 
-DEFAULT_STAGES = (
-    "initial-core",
-    "reloaded-core"
-)
-
-KNOWN_STAGES = [
-    "no-core",
-    "initial-core",
-    "reloaded-core",
-    "unique-core"
-]
+KNOWN_STAGES = ["no-core", "initial-core", "reloaded-core", "unique-core"]
 
 
 DEFAULT_ERROR_MESSAGE = [
     "Your test suite left a dangling object to a vapoursynth core.",
-    "Please make sure this does not happen, "
-    "as this might cause some previewers to crash "
-    "after reloading a script."
+    "Please make sure this does not happen, as this might cause some previewers to crash after reloading a script.",
 ]
 
 
@@ -36,17 +27,21 @@ def pytest_configure(config: "Config") -> None:
     config.addinivalue_line(
         "markers",
         'vpy(*stages: Literal["no_core", "first_core", "second_core"]): '
-        'Mark what stages should be run. (Defaults to first_core+second_core)'
+        "Mark what stages should be run. (Defaults to first_core+second_core)",
     )
+
 
 ###
 # Make sure a policy is registered before tests are collected.
 current_policy = None
 current_env = None
+
+
 def pytest_sessionstart(session):
     global current_policy
     current_policy = Policy(GlobalStore())
     current_policy.register()
+
 
 def pytest_sessionfinish():
     global current_policy, current_env
@@ -130,6 +125,7 @@ def pytest_pycollect_makeitem(collector, name, obj) -> None:
         else:
             obj._vpy_stages = DEFAULT_STAGES
 
+
 def pytest_generate_tests(metafunc):
     obj = metafunc.function
     if hasattr(obj, "_vpy_stages"):
@@ -154,7 +150,11 @@ def pytest_collection_modifyitems(session, config, items):
         new_items.extend(stages[stage])
         # Add two synthetic tests that make sure the environment is clean.
         if stage in ("initial-core", "reloaded-core"):
-            new_items.append(EnsureCleanEnvironment.from_parent(virtual_parent, name=f"@check-clean-environment[{stage}]", stage=stage))
+            new_items.append(
+                EnsureCleanEnvironment.from_parent(
+                    virtual_parent, name=f"@check-clean-environment[{stage}]", stage=stage
+                )
+            )
 
     items[:] = new_items
 
@@ -162,6 +162,8 @@ def pytest_collection_modifyitems(session, config, items):
 ###
 # Do the magic
 current_stage = "no-core"
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem):
     global current_stage, current_env
@@ -205,14 +207,18 @@ def pytest_pyfunc_call(pyfuncitem):
         if any_alive():
             freeze()
             if failed is False:
-                pyfuncitem._repr_failure_py = lambda _, style=None: CleanupFailed(None, "\n".join(DEFAULT_ERROR_MESSAGE))
+                pyfuncitem._repr_failure_py = lambda _, style=None: CleanupFailed(
+                    None, "\n".join(DEFAULT_ERROR_MESSAGE)
+                )
                 assert False
             else:
                 pre_rfp = pyfuncitem._repr_failure_py
+
                 def _new_rfp(*args, **kwargs):
                     previous = pre_rfp(*args, **kwargs)
                     err = "\n".join(DEFAULT_ERROR_MESSAGE)
                     return CleanupFailed(previous, err)
+
                 pyfuncitem._repr_failure_py = _new_rfp
                 raise failed
         elif failed:

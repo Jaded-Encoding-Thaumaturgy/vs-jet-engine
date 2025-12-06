@@ -3,16 +3,17 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 
-import gc
-import weakref
-import logging
 import contextlib
+import gc
+import logging
 import unittest
+import weakref
 
 from vsengine._hospice import admit_environment, any_alive, freeze, unfreeze
 
 
-class Obj: pass
+class Obj:
+    pass
 
 
 @contextlib.contextmanager
@@ -23,8 +24,8 @@ def hide_logs():
     finally:
         logging.disable(logging.NOTSET)
 
-class HospiceTest(unittest.TestCase):
 
+class HospiceTest(unittest.TestCase):
     def test_hospice_delays_connection(self):
         o1 = Obj()
         o2 = Obj()
@@ -72,10 +73,15 @@ class HospiceTest(unittest.TestCase):
         del o1
 
         with hide_logs():
-            self.assertTrue(any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true.")
+            self.assertTrue(
+                any_alive(),
+                "The hospice did report that all objects are not alive anymore. This is obviously not true.",
+            )
         del o2
 
-        self.assertFalse(any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true.")
+        self.assertFalse(
+            any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true."
+        )
 
     def test_hospice_can_forget_about_cores_safely(self):
         o1 = Obj()
@@ -84,13 +90,21 @@ class HospiceTest(unittest.TestCase):
         del o1
 
         with hide_logs():
-            self.assertTrue(any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true.")
+            self.assertTrue(
+                any_alive(),
+                "The hospice did report that all objects are not alive anymore. This is obviously not true.",
+            )
         freeze()
-        self.assertFalse(any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true.")
+        self.assertFalse(
+            any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true."
+        )
 
         unfreeze()
         with hide_logs():
-            self.assertTrue(any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true.")
+            self.assertTrue(
+                any_alive(),
+                "The hospice did report that all objects are not alive anymore. This is obviously not true.",
+            )
         del o2
 
         gc.collect()

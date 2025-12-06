@@ -2,16 +2,13 @@
 # Copyright (C) 2022  cid-chan
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
-from typing import *
 import unittest
+from typing import *
+
+from vapoursynth import GRAY8, RGB24, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
 
 from vsengine._testutils import forcefully_unregister_policy, use_standalone_policy
-
-from vapoursynth import core, PresetVideoFormat, VideoFormat, GRAY8, RGB24
-from vapoursynth import VideoNode, VideoFrame
-
-from vsengine.video import frame, planes, frames, render
-
+from vsengine.video import frame, frames, planes, render
 
 AnyFormat = Union[PresetVideoFormat, VideoFormat]
 

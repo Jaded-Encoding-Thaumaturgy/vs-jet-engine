@@ -3,14 +3,14 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 
-import unittest
-import threading
 import contextlib
+import threading
+import unittest
 from concurrent.futures import Future
 
-from vsengine._testutils import wrap_test_for_asyncio
 from vsengine._futures import UnifiedFuture, UnifiedIterator, unified
-from vsengine.loops import set_loop, NO_LOOP
+from vsengine._testutils import wrap_test_for_asyncio
+from vsengine.loops import NO_LOOP, set_loop
 
 
 def resolve(value):

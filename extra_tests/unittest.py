@@ -4,20 +4,17 @@
 # SPDX-License-Identifier: EUPL-1.2
 import sys
 from unittest.main import TestProgram
-from vsengine.policy import Policy, GlobalStore
-from vsengine._hospice import any_alive, freeze
 
+from vsengine._hospice import any_alive, freeze
+from vsengine.policy import GlobalStore, Policy
 
 DEFAULT_ERROR_MESSAGE = [
     "Your test suite left a dangling object to a vapoursynth core.",
-    "Please make sure this does not happen, "
-    "as this might cause some previewers to crash "
-    "after reloading a script."
+    "Please make sure this does not happen, as this might cause some previewers to crash after reloading a script.",
 ]
 
 
 class MultiCoreTestProgram(TestProgram):
-
     def __init__(self, *args, **kwargs):
         self._policy = Policy(GlobalStore())
         self._policy.register()
@@ -38,9 +35,8 @@ class MultiCoreTestProgram(TestProgram):
     def runTests(self):
         any_alive_left = False
 
-        with self._policy.new_environment() as e1:
-            with e1.use():
-                self._run_once()
+        with self._policy.new_environment() as e1, e1.use():
+            self._run_once()
         del e1
 
         if self.exit and not self.result.wasSuccessful():
@@ -52,9 +48,8 @@ class MultiCoreTestProgram(TestProgram):
             freeze()
 
         super().parseArgs(self.argv)
-        with self._policy.new_environment() as e2:
-            with e2.use():
-                self._run_once()
+        with self._policy.new_environment() as e2, e2.use():
+            self._run_once()
         del e2
 
         if any_alive():
@@ -71,10 +66,9 @@ class MultiCoreTestProgram(TestProgram):
         sys.exit(0)
 
 
-
 def main():
     MultiCoreTestProgram(module=None)
 
+
 if __name__ == "__main__":
     main()
-

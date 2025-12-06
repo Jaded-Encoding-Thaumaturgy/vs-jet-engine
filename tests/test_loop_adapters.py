@@ -3,27 +3,27 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 
+import asyncio
 import contextlib
 import threading
 import unittest
+from concurrent.futures import CancelledError, Future
 
-import asyncio
-
-from concurrent.futures import Future, CancelledError
-
-from vsengine.loops import EventLoop, get_loop, set_loop, Cancelled
-from vsengine.loops import NO_LOOP, _NoEventLoop
 from vsengine.adapters.asyncio import AsyncIOLoop
+from vsengine.loops import NO_LOOP, Cancelled, EventLoop, _NoEventLoop, set_loop
 
 
 def make_async(func):
     def _wrapped(self, *args, **kwargs):
         return self.run_within_loop(func, args, kwargs)
+
     return _wrapped
+
 
 def is_async(func):
     def _wrapped(self, *args, **kwargs):
         return self.run_within_loop_async(func, args, kwargs)
+
     return _wrapped
 
 
@@ -52,23 +52,18 @@ class AdapterTest:
 
     @make_async
     def test_wrap_cancelled_without_cancellation(self):
-        with self.with_loop() as loop:
-            with loop.wrap_cancelled():
-                pass
+        with self.with_loop() as loop, loop.wrap_cancelled():
+            pass
 
     @make_async
     def test_wrap_cancelled_with_cancellation(self):
-        with self.with_loop() as loop:
-            with self.assertCancelled():
-                with loop.wrap_cancelled():
-                    raise Cancelled
+        with self.with_loop() as loop, self.assertCancelled(), loop.wrap_cancelled():
+            raise Cancelled
 
     @make_async
     def test_wrap_cancelled_with_other_exception(self):
-        with self.with_loop() as loop:
-            with self.assertRaises(RuntimeError):
-                with loop.wrap_cancelled():
-                    raise RuntimeError()
+        with self.with_loop() as loop, self.assertRaises(RuntimeError), loop.wrap_cancelled():
+            raise RuntimeError()
 
     @make_async
     def test_next_cycle_doesnt_throw_when_not_cancelled(self):
@@ -82,7 +77,7 @@ class AdapterTest:
     def test_from_thread_with_success(self) -> None:
         def test_func():
             return self
-        
+
         with self.with_loop() as loop:
             fut = loop.from_thread(test_func)
             yield
@@ -92,7 +87,7 @@ class AdapterTest:
     def test_from_thread_with_failure(self) -> None:
         def test_func():
             raise RuntimeError
-        
+
         with self.with_loop() as loop:
             fut = loop.from_thread(test_func)
             yield
@@ -102,6 +97,7 @@ class AdapterTest:
     def test_from_thread_forwards_correctly(self) -> None:
         a = None
         k = None
+
         def test_func(*args, **kwargs):
             nonlocal a, k
             a = args
@@ -111,7 +107,7 @@ class AdapterTest:
             fut = loop.from_thread(test_func, 1, 2, 3, a="b", c="d")
             yield
             fut.result(timeout=0.5)
-            self.assertEqual(a, (1,2,3))
+            self.assertEqual(a, (1, 2, 3))
             self.assertEqual(k, {"a": "b", "c": "d"})
 
     @make_async
@@ -123,20 +119,19 @@ class AdapterTest:
             t2 = yield from self.resolve_to_thread_future(loop.to_thread(test_func))
             self.assertNotEqual(threading.current_thread(), t2)
 
-
     @make_async
     def test_to_thread_runs_inline_with_failure(self) -> None:
         def test_func():
             raise RuntimeError
-        
-        with self.with_loop() as loop:
-            with self.assertRaises(RuntimeError):
-                yield from self.resolve_to_thread_future(loop.to_thread(test_func))
+
+        with self.with_loop() as loop, self.assertRaises(RuntimeError):
+            yield from self.resolve_to_thread_future(loop.to_thread(test_func))
 
     @make_async
     def test_to_thread_forwards_correctly(self) -> None:
         a = None
         k = None
+
         def test_func(*args, **kwargs):
             nonlocal a, k
             a = args
@@ -144,12 +139,11 @@ class AdapterTest:
 
         with self.with_loop() as loop:
             yield from self.resolve_to_thread_future(loop.to_thread(test_func, 1, 2, 3, a="b", c="d"))
-            self.assertEqual(a, (1,2,3))
+            self.assertEqual(a, (1, 2, 3))
             self.assertEqual(k, {"a": "b", "c": "d"})
 
 
 class AsyncAdapterTest(AdapterTest):
-
     def run_within_loop(self, func, args, kwargs):
         async def wrapped(_):
             result = func(self, *args, **kwargs)
@@ -167,23 +161,23 @@ class AsyncAdapterTest(AdapterTest):
 
     async def next_cycle(self):
         pass
-    
+
     @is_async
     async def test_await_future_success(self):
         with self.with_loop() as loop:
             fut = Future()
+
             def _setter():
                 fut.set_result(1)
+
             threading.Thread(target=_setter).start()
-            self.assertEqual(
-                await self.wait_for(loop.await_future(fut), 0.5),
-                1
-            )
+            self.assertEqual(await self.wait_for(loop.await_future(fut), 0.5), 1)
 
     @is_async
     async def test_await_future_failure(self):
         with self.with_loop() as loop:
             fut = Future()
+
             def _setter():
                 fut.set_exception(RuntimeError())
 
@@ -192,16 +186,15 @@ class AsyncAdapterTest(AdapterTest):
                 await self.wait_for(loop.await_future(fut), 0.5)
 
 
-
 class NoLoopTest(AdapterTest, unittest.TestCase):
-
     def make_loop(self) -> EventLoop:
         return _NoEventLoop()
 
     def run_within_loop(self, func, args, kwargs):
         result = func(self, *args, **kwargs)
         if hasattr(result, "__iter__"):
-            for _ in result: pass
+            for _ in result:
+                pass
 
     @contextlib.contextmanager
     def assertCancelled(self):
@@ -209,9 +202,10 @@ class NoLoopTest(AdapterTest, unittest.TestCase):
             yield
 
     def resolve_to_thread_future(self, fut):
-        if False: yield
+        if False:
+            yield
         return fut.result(timeout=0.5)
-            
+
 
 class AsyncIOTest(AsyncAdapterTest, unittest.TestCase):
     def make_loop(self) -> AsyncIOLoop:
@@ -220,6 +214,7 @@ class AsyncIOTest(AsyncAdapterTest, unittest.TestCase):
     def run_within_loop_async(self, func, args, kwargs):
         async def wrapped():
             await func(self, *args, **kwargs)
+
         asyncio.run(wrapped())
 
     async def next_cycle(self):
@@ -246,6 +241,7 @@ except ImportError:
     print("Skipping trio")
 else:
     from vsengine.adapters.trio import TrioEventLoop
+
     class TrioTest(AsyncAdapterTest, unittest.TestCase):
         def make_loop(self) -> AsyncIOLoop:
             return TrioEventLoop(self.nursery)
@@ -258,12 +254,14 @@ else:
                 async with trio.open_nursery() as nursery:
                     self.nursery = nursery
                     await func(self, *args, **kwargs)
+
             trio.run(wrapped)
 
         def resolve_to_thread_future(self, fut):
             done = False
             result = None
             error = None
+
             async def _awaiter():
                 nonlocal done, error, result
                 try:
@@ -291,4 +289,3 @@ else:
         def assertCancelled(self):
             with self.assertRaises(trio.Cancelled):
                 yield
-

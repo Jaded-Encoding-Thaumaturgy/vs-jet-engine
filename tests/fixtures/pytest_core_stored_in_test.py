@@ -1,6 +1,4 @@
-import pytest
 from vapoursynth import core
-
 
 test = [0]
 

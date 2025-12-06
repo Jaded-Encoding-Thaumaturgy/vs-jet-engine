@@ -3,10 +3,9 @@ import unittest
 import vapoursynth as vs
 from vapoursynth import core
 
-from vsengine._testutils import forcefully_unregister_policy, use_standalone_policy
-from vsengine.policy import Policy, GlobalStore
-
 from vsengine._helpers import use_inline, wrap_variable_size
+from vsengine._testutils import forcefully_unregister_policy, use_standalone_policy
+from vsengine.policy import GlobalStore, Policy
 
 
 class TestUseInline(unittest.TestCase):
@@ -22,30 +21,24 @@ class TestUseInline(unittest.TestCase):
             pass
 
     def test_with_set_environment(self):
-        with Policy(GlobalStore()) as p:
-            with p.new_environment() as env:
-                with env.use():
-                    with use_inline("test_with_set_environment", None):
-                        pass
+        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+            with use_inline("test_with_set_environment", None):
+                pass
 
     def test_fails_without_an_environment(self):
-        with Policy(GlobalStore()):
-            with self.assertRaises(EnvironmentError):
-                with use_inline("test_fails_without_an_environment", None):
-                    pass
+        with Policy(GlobalStore()), self.assertRaises(EnvironmentError):
+            with use_inline("test_fails_without_an_environment", None):
+                pass
 
     def test_accepts_a_managed_environment(self):
-        with Policy(GlobalStore()) as p:
-            with p.new_environment() as env:
-                with use_inline("test_accepts_a_managed_environment", env):
-                    self.assertEqual(env.vs_environment, vs.get_current_environment())
-
+        with Policy(GlobalStore()) as p, p.new_environment() as env:
+            with use_inline("test_accepts_a_managed_environment", env):
+                self.assertEqual(env.vs_environment, vs.get_current_environment())
 
     def test_accepts_a_standard_environment(self):
-        with Policy(GlobalStore()) as p:
-            with p.new_environment() as env:
-                with use_inline("test_accepts_a_standard_environment", env.vs_environment):
-                    self.assertEqual(env.vs_environment, vs.get_current_environment())
+        with Policy(GlobalStore()) as p, p.new_environment() as env:
+            with use_inline("test_accepts_a_standard_environment", env.vs_environment):
+                self.assertEqual(env.vs_environment, vs.get_current_environment())
 
 
 class TestWrapVariable(unittest.TestCase):
@@ -58,9 +51,11 @@ class TestWrapVariable(unittest.TestCase):
 
     def test_wrap_variable_bypasses_on_non_variable(self):
         bc = core.std.BlankClip()
+
         def _wrapper(c):
             self.assertIs(c, bc)
             return c
+
         wrap_variable_size(bc, bc.format, _wrapper)
 
     def test_wrap_caches_different_formats(self):
@@ -69,6 +64,7 @@ class TestWrapVariable(unittest.TestCase):
         sp = core.std.Splice([bc24, bc48, bc24, bc48], mismatch=True)
 
         counter = 0
+
         def _wrapper(c):
             nonlocal counter
             counter += 1
@@ -87,6 +83,7 @@ class TestWrapVariable(unittest.TestCase):
         sp = core.std.Splice([bc1, bc2, bc1, bc2], mismatch=True)
 
         counter = 0
+
         def _wrapper(c):
             nonlocal counter
             counter += 1
@@ -104,6 +101,7 @@ class TestWrapVariable(unittest.TestCase):
         sp = core.std.Splice([*bcs, *bcs], mismatch=True)
 
         counter = 0
+
         def _wrapper(c):
             nonlocal counter
             counter += 1
@@ -114,4 +112,3 @@ class TestWrapVariable(unittest.TestCase):
             pass
 
         self.assertGreaterEqual(counter, 101)
-

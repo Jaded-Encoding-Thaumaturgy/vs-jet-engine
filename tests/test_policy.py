@@ -7,17 +7,14 @@ import unittest
 import vapoursynth
 
 from vsengine._testutils import forcefully_unregister_policy
-
-from vsengine.policy import GlobalStore
-from vsengine.policy import Policy
+from vsengine.policy import GlobalStore, Policy
 
 
 class PolicyTest(unittest.TestCase):
-
     def setUp(self) -> None:
         forcefully_unregister_policy()
         self.policy = Policy(GlobalStore())
-    
+
     def tearDown(self) -> None:
         forcefully_unregister_policy()
 
@@ -58,7 +55,6 @@ class PolicyTest(unittest.TestCase):
 
 
 class ManagedEnvironmentTest(unittest.TestCase):
-
     def setUp(self) -> None:
         forcefully_unregister_policy()
         self.store = GlobalStore()
@@ -95,29 +91,26 @@ class ManagedEnvironmentTest(unittest.TestCase):
         env.dispose()
 
     def test_environment_can_capture_outputs(self):
-        with self.policy.new_environment() as env1:
-            with self.policy.new_environment() as env2:
-                with env1.use():
-                    vapoursynth.core.std.BlankClip().set_output(0)
+        with self.policy.new_environment() as env1, self.policy.new_environment() as env2:
+            with env1.use():
+                vapoursynth.core.std.BlankClip().set_output(0)
 
-                self.assertEqual(len(env1.outputs), 1)
-                self.assertEqual(len(env2.outputs), 0)
+            self.assertEqual(len(env1.outputs), 1)
+            self.assertEqual(len(env2.outputs), 0)
 
     def test_environment_can_capture_cores(self):
-        with self.policy.new_environment() as env1:
-            with self.policy.new_environment() as env2:
-                self.assertNotEqual(env1.core, env2.core)
+        with self.policy.new_environment() as env1, self.policy.new_environment() as env2:
+            self.assertNotEqual(env1.core, env2.core)
 
     def test_inline_section_is_invisible(self):
-        with self.policy.new_environment() as env1:
-            with self.policy.new_environment() as env2:
-                env1.switch()
+        with self.policy.new_environment() as env1, self.policy.new_environment() as env2:
+            env1.switch()
 
-                env_before = self.store.get_current_environment()
+            env_before = self.store.get_current_environment()
 
-                with env2.inline_section():
-                    self.assertNotEqual(vapoursynth.get_current_environment(), env1.vs_environment)
-                    self.assertEqual(env_before, self.store.get_current_environment())
-
-                self.assertEqual(vapoursynth.get_current_environment(), env1.vs_environment)
+            with env2.inline_section():
+                self.assertNotEqual(vapoursynth.get_current_environment(), env1.vs_environment)
                 self.assertEqual(env_before, self.store.get_current_environment())
+
+            self.assertEqual(vapoursynth.get_current_environment(), env1.vs_environment)
+            self.assertEqual(env_before, self.store.get_current_environment())

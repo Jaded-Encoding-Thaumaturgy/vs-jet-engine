@@ -1,9 +1,7 @@
 import os
-import sys
-import platform
-import unittest
 import subprocess
-
+import sys
+import unittest
 
 DIR = os.path.dirname(__file__)
 PATH = os.path.join(DIR, "fixtures")
@@ -16,13 +14,13 @@ def run_fixture(fixture: str, expect_status: int = 0):
     else:
         path += os.pathsep + os.path.abspath(os.path.join(".."))
 
-    env = {**os.environ, "PYTHONPATH" : path}
+    env = {**os.environ, "PYTHONPATH": path}
 
     process = subprocess.run(
         [sys.executable, "-m", "pytest", os.path.join(PATH, f"{fixture}.py"), "-o", "cache_dir=/build/.cache"],
         stderr=subprocess.STDOUT,
         stdout=subprocess.PIPE,
-        env=env
+        env=env,
     )
     if process.returncode != expect_status:
         print()
@@ -32,7 +30,6 @@ def run_fixture(fixture: str, expect_status: int = 0):
 
 
 class TestUnittestWrapper(unittest.TestCase):
-    
     def test_core_in_module(self):
         run_fixture("pytest_core_in_module", 2)
 
@@ -41,4 +38,3 @@ class TestUnittestWrapper(unittest.TestCase):
 
     def test_succeeds(self):
         run_fixture("pytest_core_succeeds", 0)
-

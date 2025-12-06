@@ -1,16 +1,15 @@
-import os
 import json
+import os
 import unittest
 
-from vapoursynth import core
 import vapoursynth as vs
+from vapoursynth import core
 
 from vsengine._testutils import forcefully_unregister_policy, use_standalone_policy
 from vsengine.convert import to_rgb, yuv_heuristic
 
-
 DIR = os.path.dirname(__file__)
-# Generated with 
+# Generated with
 # mediainfo -Output=JOSN -Full [Filenames]
 # | jq '.media.track[] | select(."@type" == "Video") | {matrix: .matrix_coefficients, width: .Width, height: .Height, primaries: .colour_primaries, transfer: .transfer_characteristics, chromaloc: .ChromaSubsampling_Position} | select(.matrix)' | jq -s
 #
@@ -22,28 +21,10 @@ PATH = os.path.join(DIR, "fixtures", "heuristic_examples.json")
 with open(PATH) as h:
     HEURISTIC_EXAMPLES = json.load(h)
 
-MATRIX_MAPPING = {
-    "BT.2020 non-constant": "2020ncl",
-    "BT.709": "709",
-    "BT.470 System B/G": "470bg",
-    "BT.601": "170m"
-}
-TRANSFER_MAPPING = {
-    "PQ": "st2084",
-    "BT.709": "709",
-    "BT.470 System B/G": "470bg",
-    "BT.601": "601"
-}
-PRIMARIES_MAPPING = {
-    "BT.2020": "2020",
-    "BT.709": "709",
-    "BT.601 PAL": "470bg",
-    "BT.601 NTSC": "170m"
-}
-CHROMALOC_MAPPING = {
-    None: "left",
-    "Type 2": "top_left"
-}
+MATRIX_MAPPING = {"BT.2020 non-constant": "2020ncl", "BT.709": "709", "BT.470 System B/G": "470bg", "BT.601": "170m"}
+TRANSFER_MAPPING = {"PQ": "st2084", "BT.709": "709", "BT.470 System B/G": "470bg", "BT.601": "601"}
+PRIMARIES_MAPPING = {"BT.2020": "2020", "BT.709": "709", "BT.601 PAL": "470bg", "BT.601 NTSC": "170m"}
+CHROMALOC_MAPPING = {None: "left", "Type 2": "top_left"}
 
 
 class TestToRGB(unittest.TestCase):
@@ -56,6 +37,7 @@ class TestToRGB(unittest.TestCase):
 
     def test_heuristics_provides_all_arguments(self):
         yuv = core.std.BlankClip(format=vs.YUV420P8)
+
         def _pseudo_scaler(c, **args):
             self.assertTrue("chromaloc_in_s" in args)
             self.assertTrue("range_in_s" in args)
@@ -80,13 +62,12 @@ class TestToRGB(unittest.TestCase):
             raw_matrix = result["matrix_in_s"]
             raw_chromaloc = result["chromaloc_in_s"]
 
-            if raw_primary != PRIMARIES_MAPPING[example["primaries"]]:
-                count_misses += 1
-            elif raw_transfer != TRANSFER_MAPPING[example["transfer"]]:
-                count_misses += 1
-            elif raw_matrix != MATRIX_MAPPING[example["matrix"]]:
-                count_misses += 1
-            elif raw_chromaloc != CHROMALOC_MAPPING[example["chromaloc"]]:
+            if (
+                raw_primary != PRIMARIES_MAPPING[example["primaries"]]
+                or raw_transfer != TRANSFER_MAPPING[example["transfer"]]
+                or raw_matrix != MATRIX_MAPPING[example["matrix"]]
+                or raw_chromaloc != CHROMALOC_MAPPING[example["chromaloc"]]
+            ):
                 count_misses += 1
             else:
                 count_hits += 1
