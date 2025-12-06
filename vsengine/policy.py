@@ -68,7 +68,7 @@ import threading
 import weakref
 from collections.abc import Iterator, Mapping
 from types import TracebackType
-from typing import Any, Protocol, Self
+from typing import TYPE_CHECKING, Self
 
 import vapoursynth as vs
 from vapoursynth import Environment, EnvironmentData, EnvironmentPolicy, EnvironmentPolicyAPI, register_policy
@@ -81,18 +81,18 @@ __all__ = ["ContextVarStore", "GlobalStore", "ManagedEnvironment", "Policy", "Th
 logger = logging.getLogger(__name__)
 
 
-class EnvironmentStore(Protocol):
+class EnvironmentStore:
     """
     Environment Stores manage which environment is currently active.
     """
 
-    def set_current_environment(self, environment: Any) -> None:
+    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
         """
         Set the current environment in the store.
         """
         ...
 
-    def get_current_environment(self) -> Any:
+    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
         """
         Retrieve the current environment from the store (if any)
         """
@@ -104,16 +104,16 @@ class GlobalStore(EnvironmentStore):
     This is the simplest store: It just stores the environment in a variable.
     """
 
-    _current: EnvironmentData | None
+    _current: weakref.ReferenceType[EnvironmentData] | None
     __slots__ = ("_current",)
 
     def __init__(self) -> None:
         self._current = None
 
-    def set_current_environment(self, environment: EnvironmentData | None) -> None:
+    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
         self._current = environment
 
-    def get_current_environment(self) -> EnvironmentData | None:
+    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
         return self._current
 
 
@@ -129,10 +129,10 @@ class ThreadLocalStore(EnvironmentStore):
     def __init__(self) -> None:
         self._current = threading.local()
 
-    def set_current_environment(self, environment: EnvironmentData | None) -> None:
+    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
         self._current.environment = environment
 
-    def get_current_environment(self) -> EnvironmentData | None:
+    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
         return getattr(self._current, "environment", None)
 
 
@@ -141,15 +141,15 @@ class ContextVarStore(EnvironmentStore):
     If you are using AsyncIO or similar frameworks, use this store.
     """
 
-    _current: contextvars.ContextVar[EnvironmentData | None]
+    _current: contextvars.ContextVar[weakref.ReferenceType[EnvironmentData] | None]
 
     def __init__(self, name: str = "vapoursynth") -> None:
         self._current = contextvars.ContextVar(name)
 
-    def set_current_environment(self, environment: EnvironmentData | None) -> None:
+    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
         self._current.set(environment)
 
-    def get_current_environment(self) -> EnvironmentData | None:
+    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
         return self._current.get(None)
 
 
@@ -216,6 +216,9 @@ class _ManagedPolicy(EnvironmentPolicy):
                 return None
 
             received_environment = current_environment()
+
+            if TYPE_CHECKING:
+                assert received_environment
 
             if not self.is_alive(received_environment):
                 logger.warning(f"Got dead environment: {received_environment!r}")
@@ -307,12 +310,13 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
         """
         Switches to this environment within a block.
         """
-        prev_environment = self._policy.managed._store.get_current_environment()
+        # prev_environment = self._policy.managed._store.get_current_environment()
         with self._environment.use():
             yield
 
-        # Workaround: On 32bit systems, environment policies do not reset.
-        self._policy.managed.set_environment(prev_environment)
+        # FIXME
+        # # Workaround: On 32bit systems, environment policies do not reset.
+        # self._policy.managed.set_environment(prev_environment)
 
     def switch(self) -> None:
         """
