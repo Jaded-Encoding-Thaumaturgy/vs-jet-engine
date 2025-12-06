@@ -2,7 +2,7 @@
 # Copyright (C) 2022  cid-chan
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from concurrent.futures import Future
 from contextlib import AbstractContextManager
 from threading import RLock
@@ -12,7 +12,7 @@ from vapoursynth import core
 
 def buffer_futures[T_co](
     futures: Iterable[Future[T_co]], prefetch: int = 0, backlog: int | None = None
-) -> Iterable[Future[T_co]]:
+) -> Iterator[Future[T_co]]:
     if prefetch == 0:
         prefetch = core.num_threads
     if backlog is None:
@@ -70,7 +70,6 @@ def buffer_futures[T_co](
     _refill()
 
     sidx = 0
-    fut: Future[T_co]
     try:
         while (not finished) or (len(reorder) > 0) or running > 0:
             if sidx not in reorder:
@@ -89,7 +88,7 @@ def buffer_futures[T_co](
         finished = True
 
 
-def close_when_needed[T](future_iterable: Iterable[Future[AbstractContextManager[T]]]) -> Iterable[Future[T]]:
+def close_when_needed[T](future_iterable: Iterable[Future[AbstractContextManager[T]]]) -> Iterator[Future[T]]:
     def copy_future_and_run_cb_before(fut: Future[AbstractContextManager[T]]) -> Future[T]:
         f = Future[T]()
 
