@@ -400,6 +400,7 @@ trio = [
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "pytest" },
     { name = "ruff" },
     { name = "trio" },
     { name = "vsstubs", marker = "python_full_version >= '3.13'" },
@@ -416,6 +417,7 @@ provides-extras = ["trio", "test"]
 [package.metadata.requires-dev]
 dev = [
     { name = "mypy", specifier = ">=1.19.0" },
+    { name = "pytest", specifier = ">=9.0.1" },
     { name = "ruff", specifier = ">=0.14.7" },
     { name = "trio" },
     { name = "vsstubs", marker = "python_full_version >= '3.13'" },
