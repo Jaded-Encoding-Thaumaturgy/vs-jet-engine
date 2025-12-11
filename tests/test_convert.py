@@ -5,7 +5,7 @@ import unittest
 import vapoursynth as vs
 from vapoursynth import core
 
-from vsengine._testutils import forcefully_unregister_policy, use_standalone_policy
+from tests._testutils import forcefully_unregister_policy, use_standalone_policy
 from vsengine.convert import to_rgb, yuv_heuristic
 
 DIR = os.path.dirname(__file__)
@@ -35,7 +35,7 @@ class TestToRGB(unittest.TestCase):
     def tearDown(self) -> None:
         forcefully_unregister_policy()
 
-    def test_heuristics_provides_all_arguments(self):
+    def test_heuristics_provides_all_arguments(self) -> None:
         yuv = core.std.BlankClip(format=vs.YUV420P8)
 
         def _pseudo_scaler(c, **args):
@@ -48,7 +48,7 @@ class TestToRGB(unittest.TestCase):
 
         to_rgb(yuv, scaler=_pseudo_scaler)
 
-    def test_heuristics_with_examples(self):
+    def test_heuristics_with_examples(self) -> None:
         count_hits = 0
         count_misses = 0
 
@@ -74,7 +74,7 @@ class TestToRGB(unittest.TestCase):
 
         self.assertGreaterEqual(count_hits, count_misses)
 
-    def test_converts_to_rgb24(self):
+    def test_converts_to_rgb24(self) -> None:
         # Should be sufficiently untagged. lel
         yuv8 = core.std.BlankClip(format=vs.YUV420P8)
         gray = core.std.BlankClip(format=vs.GRAY8)
@@ -86,7 +86,7 @@ class TestToRGB(unittest.TestCase):
             self.assertEqual(int(to_rgb(clip).format), vs.RGB24)
             self.assertEqual(int(to_rgb(clip, bits_per_sample=16).format), vs.RGB48)
 
-    def test_supports_float(self):
+    def test_supports_float(self) -> None:
         # Test regression: Floating images cannot be shown.
         yuv_half = core.std.BlankClip(format=vs.YUV444PH)
         yuv_single = core.std.BlankClip(format=vs.YUV444PS)

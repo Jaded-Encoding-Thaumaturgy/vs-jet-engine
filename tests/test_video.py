@@ -7,7 +7,7 @@ from typing import *
 
 from vapoursynth import GRAY8, RGB24, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
 
-from vsengine._testutils import forcefully_unregister_policy, use_standalone_policy
+from tests._testutils import forcefully_unregister_policy, use_standalone_policy
 from vsengine.video import frame, frames, planes, render
 
 AnyFormat = Union[PresetVideoFormat, VideoFormat]

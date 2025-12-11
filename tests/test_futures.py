@@ -8,8 +8,8 @@ import threading
 import unittest
 from concurrent.futures import Future
 
+from tests._testutils import wrap_test_for_asyncio
 from vsengine._futures import UnifiedFuture, UnifiedIterator, unified
-from vsengine._testutils import wrap_test_for_asyncio
 from vsengine.loops import NO_LOOP, set_loop
 
 

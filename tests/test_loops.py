@@ -10,7 +10,7 @@ from concurrent.futures import CancelledError, Future
 
 import vapoursynth
 
-from vsengine._testutils import forcefully_unregister_policy
+from tests._testutils import forcefully_unregister_policy
 from vsengine.loops import Cancelled, EventLoop, _NoEventLoop, from_thread, get_loop, set_loop, to_thread
 from vsengine.policy import Policy, ThreadLocalStore
 

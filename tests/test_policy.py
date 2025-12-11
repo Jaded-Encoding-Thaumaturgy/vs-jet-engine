@@ -6,7 +6,7 @@ import unittest
 
 import vapoursynth
 
-from vsengine._testutils import forcefully_unregister_policy
+from tests._testutils import forcefully_unregister_policy
 from vsengine.policy import GlobalStore, Policy
 
 

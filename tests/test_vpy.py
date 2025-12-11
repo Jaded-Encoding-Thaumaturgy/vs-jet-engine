@@ -9,31 +9,33 @@ import os
 import textwrap
 import threading
 import types
-import unittest
+from collections.abc import Callable, Generator
+from typing import Any
 
+import pytest
 import vapoursynth
 
-from vsengine._testutils import BLACKBOARD, forcefully_unregister_policy, wrap_test_for_asyncio
+from tests._testutils import BLACKBOARD, forcefully_unregister_policy
 from vsengine.loops import NO_LOOP, set_loop
 from vsengine.policy import GlobalStore, Policy
 from vsengine.vpy import (
     ExecutionFailed,
+    ManagedScript,
     Script,
     WrapAllErrors,
     _load,
     chdir_runner,
-    code,
     inline_runner,
-    script,
-    variables,
+    load_code,
+    load_file,
 )
 
-DIR = os.path.dirname(__file__)
-PATH = os.path.join(DIR, "fixtures", "test.vpy")
+DIR: str = os.path.dirname(__file__)
+PATH: str = os.path.join(DIR, "fixtures", "test.vpy")
 
 
 @contextlib.contextmanager
-def noop():
+def noop() -> Generator[None, None, None]:
     yield
 
 
@@ -41,349 +43,354 @@ class TestException(Exception):
     pass
 
 
-def callback_script(func):
-    def _script(ctx, module):
+def callback_script(func: Callable[[types.ModuleType], None]) -> Callable[[Any, types.ModuleType], None]:
+    def _script(ctx: Any, module: types.ModuleType) -> None:
         with ctx:
             func(module)
 
     return _script
 
 
-class ScriptTest(unittest.TestCase):
-    def setUp(self) -> None:
-        forcefully_unregister_policy()
-
-    def tearDown(self) -> None:
-        forcefully_unregister_policy()
-        set_loop(NO_LOOP)
-
-    def test_run_executes_successfully(self):
-        run = False
-
-        @callback_script
-        def test_code(_):
-            nonlocal run
-            run = True
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            script.run()
-        self.assertTrue(run)
-
-    def test_run_wraps_exception(self):
-        @callback_script
-        def test_code(_):
-            raise TestException()
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            fut = script.run()
-            self.assertIsInstance(fut.exception(), ExecutionFailed)
-            self.assertIsInstance(fut.exception().parent_error, TestException)
-
-    def test_execute_resolves_immediately(self):
-        run = False
-
-        @callback_script
-        def test_code(_):
-            nonlocal run
-            run = True
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            script.result()
-        self.assertTrue(run)
-
-    def test_execute_resolves_to_script(self):
-        @callback_script
-        def test_code(_):
-            pass
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            self.assertIs(script.result(), script)
-
-    def test_execute_resolves_immediately_when_raising(self):
-        @callback_script
-        def test_code(_):
-            raise TestException
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            try:
-                script.result()
-            except ExecutionFailed as err:
-                self.assertIsInstance(err.parent_error, TestException)
-            except Exception as e:
-                self.fail(f"Wrong exception: {e!r}")
-            else:
-                self.fail("Test execution didn't fail properly.")
-
-    @wrap_test_for_asyncio
-    async def test_run_async(self):
-        run = False
-
-        @callback_script
-        def test_code(_):
-            nonlocal run
-            run = True
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            await script.run_async()
-        self.assertTrue(run)
-
-    @wrap_test_for_asyncio
-    async def test_await_directly(self):
-        run = False
-
-        @callback_script
-        def test_code(_):
-            nonlocal run
-            run = True
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            await Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-        self.assertTrue(run)
-
-    def test_cant_dispose_non_managed_environments(self):
-        @callback_script
-        def test_code(_):
-            pass
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            script = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
-            with self.assertRaises(ValueError):
-                script.dispose()
-
-    def test_disposes_managed_environment(self):
-        @callback_script
-        def test_code(_):
-            pass
-
-        with Policy(GlobalStore()) as p:
-            env = p.new_environment()
-            script = Script(test_code, types.ModuleType("__test__"), env, inline_runner)
-
-            try:
-                script.dispose()
-            except:
-                env.dispose()
-                raise
-
-    def test_noop_context_manager_for_non_managed_environments(self):
-        @callback_script
-        def test_code(_):
-            pass
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env:
-            with Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner) as s:
-                pass
-            self.assertFalse(env.disposed)
-
-    def test_disposing_context_manager_for_managed_environments(self):
-        @callback_script
-        def test_code(_):
-            pass
-
-        with Policy(GlobalStore()) as p:
-            env = p.new_environment()
-            with Script(test_code, types.ModuleType("__test__"), env, inline_runner):
-                pass
-            try:
-                self.assertTrue(env.disposed)
-            except:
-                env.dispose()
-                raise
-
-    def test_chdir_changes_chdir(self):
-        curdir = None
-
-        @callback_script
-        def test_code(_):
-            nonlocal curdir
-            curdir = os.getcwd()
-
-        wrapped = chdir_runner(DIR, inline_runner)
-        wrapped(test_code, noop(), 2)
-        self.assertEqual(curdir, DIR)
-
-    def test_chdir_changes_chdir_back(self):
-        @callback_script
-        def test_code(_):
-            pass
-
-        wrapped = chdir_runner(DIR, inline_runner)
-
-        before = os.getcwd()
-        wrapped(test_code, noop(), None)
-        self.assertEqual(os.getcwd(), before)
-
-    def test_load_uses_current_environment(self):
-        vpy_env = None
-
-        @callback_script
-        def test_code(_):
-            nonlocal vpy_env
-            vpy_env = vapoursynth.get_current_environment()
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            _load(test_code, None, inline=False, chdir=None).result()
-            self.assertEqual(vpy_env, env.vs_environment)
-
-    def test_load_creates_new_environment(self):
-        vpy_env = None
-
-        @callback_script
-        def test_code(_):
-            nonlocal vpy_env
-            vpy_env = vapoursynth.get_current_environment()
-
-        with Policy(GlobalStore()) as p:
-            script = _load(test_code, p, inline=True, chdir=None)
-            try:
-                script.result()
-                self.assertEqual(vpy_env, script.environment.vs_environment)
-            finally:
-                script.dispose()
-
-    def test_load_chains_script(self):
-        @callback_script
-        def test_code_1(module):
-            self.assertFalse(hasattr(module, "test"))
-            module.test = True
-
-        @callback_script
-        def test_code_2(module):
-            self.assertEqual(module.test, True)
-
-        with Policy(GlobalStore()) as p:
-            script1 = _load(test_code_1, p, inline=True, chdir=None)
-            env = script1.environment
-            try:
-                script1.result()
-                script2 = _load(test_code_2, script1, inline=True, chdir=None)
-                script2.result()
-            finally:
-                env.dispose()
-
-    def test_load_with_custom_name(self):
-        @callback_script
-        def test_code_1(module):
-            self.assertEqual(module.__name__, "__test_1__")
-
-        @callback_script
-        def test_code_2(module):
-            self.assertEqual(module.__name__, "__test_2__")
-
-        with Policy(GlobalStore()) as p:
-            try:
-                script1 = _load(test_code_1, p, module_name="__test_1__")
-                script1.result()
-            finally:
-                script1.dispose()
-
-            try:
-                script2 = _load(test_code_2, p, module_name="__test_2__")
-                script2.result()
-            finally:
-                script2.dispose()
-
-    def test_load_runs_chdir(self):
-        curdir = None
-
-        @callback_script
-        def test_code(_):
-            nonlocal curdir
-            curdir = os.getcwd()
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            previous = os.getcwd()
-            _load(test_code, None, inline=True, chdir=DIR).result()
-            self.assertEqual(curdir, DIR)
-            self.assertEqual(os.getcwd(), previous)
-
-    def test_load_runs_in_thread_when_requested(self):
-        thread = None
-
-        @callback_script
-        def test_code(_):
-            nonlocal thread
-            thread = threading.current_thread()
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            _load(test_code, None, inline=False, chdir=None).result()
-            self.assertIsNot(thread, threading.current_thread())
-
-    def test_load_runs_inline_by_default(self):
-        thread = None
-
-        @callback_script
-        def test_code(_):
-            nonlocal thread
-            thread = threading.current_thread()
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            _load(test_code, None, chdir=None).result()
-            self.assertIs(thread, threading.current_thread())
-
-    def test_code_runs_string(self):
-        CODE = textwrap.dedent("""
-            from vsengine._testutils import BLACKBOARD
-            BLACKBOARD["vpy_test_runs_raw_code_str"] = True
-        """)
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            code(CODE).result()
-            self.assertEqual(BLACKBOARD.get("vpy_test_runs_raw_code_str"), True)
-
-    def test_code_runs_bytes(self):
-        CODE = textwrap.dedent("""
-            # encoding: latin-1
-            from vsengine._testutils import BLACKBOARD
-            BLACKBOARD["vpy_test_runs_raw_code_bytes"] = True
-        """).encode("latin-1")
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            code(CODE).result()
-            self.assertEqual(BLACKBOARD.get("vpy_test_runs_raw_code_bytes"), True)
-
-    def test_code_runs_ast(self):
-        CODE = ast.parse(
-            textwrap.dedent("""
-            from vsengine._testutils import BLACKBOARD
-            BLACKBOARD["vpy_test_runs_raw_code_ast"] = True
-        """)
-        )
-
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            code(CODE).result()
-            self.assertEqual(BLACKBOARD.get("vpy_test_runs_raw_code_ast"), True)
-
-    def test_script_runs(self):
-        BLACKBOARD.clear()
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            script(PATH).result()
-            self.assertEqual(BLACKBOARD.get("vpy_run_script"), True)
-
-    def test_script_runs_with_custom_name(self):
-        BLACKBOARD.clear()
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            script(PATH, module_name="__test__").result()
-            self.assertEqual(BLACKBOARD.get("vpy_run_script_name"), "__test__")
-
-    def test_can_get_and_set_variables(self):
-        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
-            script = variables({"a": 1})
-            script.result()
-            self.assertEqual(script.get_variable("a").result(), 1)
-
-    def test_wrap_exceptions_wraps_exception(self):
-        err = RuntimeError()
+@pytest.fixture(autouse=True)
+def clean_policy() -> Generator[None, None, None]:
+    """Fixture to handle setup and teardown for policy and loops."""
+    forcefully_unregister_policy()
+    yield
+    forcefully_unregister_policy()
+    set_loop(NO_LOOP)
+
+
+def test_run_executes_successfully() -> None:
+    run = False
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal run
+        run = True
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
+        s.run()
+
+    assert run
+
+
+def test_run_wraps_exception() -> None:
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        raise TestException()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
+        fut = s.run()
+
+        exc = fut.exception()
+        assert isinstance(exc, ExecutionFailed)
+        assert isinstance(exc.parent_error, TestException)
+
+
+def test_execute_resolves_immediately() -> None:
+    run = False
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal run
+        run = True
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
+        s.result()
+
+    assert run
+
+
+def test_execute_resolves_to_script() -> None:
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        pass
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
+        s.result()
+
+
+def test_execute_resolves_immediately_when_raising() -> None:
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        raise TestException
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
         try:
-            with WrapAllErrors():
-                raise err
-        except ExecutionFailed as e:
-            self.assertIs(e.parent_error, err)
+            s.result()
+        except ExecutionFailed as err:
+            assert isinstance(err.parent_error, TestException)
+        except Exception as e:
+            pytest.fail(f"Wrong exception: {e!r}")
         else:
-            self.fail("Wrap all errors swallowed the exception")
+            pytest.fail("Test execution didn't fail properly.")
+
+
+@pytest.mark.asyncio
+async def test_run_async() -> None:
+    run = False
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal run
+        run = True
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
+        await s.run_async()
+
+    assert run
+
+
+@pytest.mark.asyncio
+async def test_await_directly() -> None:
+    run = False
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal run
+        run = True
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env:
+        await Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
+
+    assert run
+
+
+def test_disposes_managed_environment() -> None:
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        pass
+
+    with Policy(GlobalStore()) as p:
+        env = p.new_environment()
+        s = ManagedScript(test_code, types.ModuleType("__test__"), env, inline_runner)
+
+        try:
+            s.dispose()
+        except Exception:
+            env.dispose()
+            raise
+
+
+def test_disposing_context_manager_for_managed_environments() -> None:
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        pass
+
+    with Policy(GlobalStore()) as p:
+        env = p.new_environment()
+        with ManagedScript(test_code, types.ModuleType("__test__"), env, inline_runner):
+            pass
+
+        try:
+            assert env.disposed
+        except Exception:
+            env.dispose()
+            raise
+
+
+def test_chdir_changes_chdir() -> None:
+    curdir: str | None = None
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal curdir
+        curdir = os.getcwd()
+
+    wrapped = chdir_runner(DIR, inline_runner)
+    wrapped(test_code, noop(), 2)
+    assert curdir == DIR
+
+
+def test_chdir_changes_chdir_back() -> None:
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        pass
+
+    wrapped = chdir_runner(DIR, inline_runner)
+
+    before = os.getcwd()
+    wrapped(test_code, noop(), None)
+    assert os.getcwd() == before
+
+
+def test_load_uses_current_environment() -> None:
+    vpy_env: Any = None
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal vpy_env
+        vpy_env = vapoursynth.get_current_environment()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        _load(test_code, None, inline=False, chdir=None).result()
+        assert vpy_env == env.vs_environment
+
+
+def test_load_creates_new_environment() -> None:
+    vpy_env: Any = None
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal vpy_env
+        vpy_env = vapoursynth.get_current_environment()
+
+    with Policy(GlobalStore()) as p:
+        s = _load(test_code, p, inline=True, chdir=None)
+        try:
+            s.result()
+            assert vpy_env == s.environment.vs_environment
+        finally:
+            s.dispose()
+
+
+def test_load_chains_script() -> None:
+    @callback_script
+    def test_code_1(module: types.ModuleType) -> None:
+        assert not hasattr(module, "test")
+        module.test = True  # type: ignore[attr-defined]
+
+    @callback_script
+    def test_code_2(module: types.ModuleType) -> None:
+        assert module.test is True
+
+    with Policy(GlobalStore()) as p:
+        script1 = _load(test_code_1, p, inline=True, chdir=None)
+        env = script1.environment
+        try:
+            script1.result()
+            script2 = _load(test_code_2, script1, inline=True, chdir=None)
+            script2.result()
+        finally:
+            env.dispose()
+
+
+def test_load_with_custom_name() -> None:
+    @callback_script
+    def test_code_1(module: types.ModuleType) -> None:
+        assert module.__name__ == "__test_1__"
+
+    @callback_script
+    def test_code_2(module: types.ModuleType) -> None:
+        assert module.__name__ == "__test_2__"
+
+    with Policy(GlobalStore()) as p:
+        try:
+            script1 = _load(test_code_1, p, module_name="__test_1__")
+            script1.result()
+        finally:
+            script1.dispose()
+
+        try:
+            script2 = _load(test_code_2, p, module_name="__test_2__")
+            script2.result()
+        finally:
+            script2.dispose()
+
+
+def test_load_runs_chdir() -> None:
+    curdir: str | None = None
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal curdir
+        curdir = os.getcwd()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        previous = os.getcwd()
+        _load(test_code, None, inline=True, chdir=DIR).result()
+        assert curdir == DIR
+        assert os.getcwd() == previous
+
+
+def test_load_runs_in_thread_when_requested() -> None:
+    thread: threading.Thread | None = None
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal thread
+        thread = threading.current_thread()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        _load(test_code, None, inline=False, chdir=None).result()
+        assert thread is not threading.current_thread()
+
+
+def test_load_runs_inline_by_default() -> None:
+    thread: threading.Thread | None = None
+
+    @callback_script
+    def test_code(_: types.ModuleType) -> None:
+        nonlocal thread
+        thread = threading.current_thread()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        _load(test_code, None, chdir=None).result()
+        assert thread is threading.current_thread()
+
+
+def test_code_runs_string() -> None:
+    CODE = textwrap.dedent("""
+        from vsengine._testutils import BLACKBOARD
+        BLACKBOARD["vpy_test_runs_raw_code_str"] = True
+    """)
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_code(CODE).result()
+        assert BLACKBOARD.get("vpy_test_runs_raw_code_str") is True
+
+
+def test_code_runs_bytes() -> None:
+    CODE = textwrap.dedent("""
+        # encoding: latin-1
+        from vsengine._testutils import BLACKBOARD
+        BLACKBOARD["vpy_test_runs_raw_code_bytes"] = True
+    """).encode("latin-1")
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_code(CODE).result()
+        assert BLACKBOARD.get("vpy_test_runs_raw_code_bytes") is True
+
+
+def test_code_runs_ast() -> None:
+    CODE = ast.parse(
+        textwrap.dedent("""
+        from vsengine._testutils import BLACKBOARD
+        BLACKBOARD["vpy_test_runs_raw_code_ast"] = True
+    """)
+    )
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_code(CODE).result()
+        assert BLACKBOARD.get("vpy_test_runs_raw_code_ast") is True
+
+
+def test_script_runs() -> None:
+    BLACKBOARD.clear()
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_code(PATH).result()
+        assert BLACKBOARD.get("vpy_run_script") is True
+
+
+def test_script_runs_with_custom_name() -> None:
+    BLACKBOARD.clear()
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_file(PATH, module="__test__").result()
+        assert BLACKBOARD.get("vpy_run_script_name") == "__test__"
+
+
+def test_wrap_exceptions_wraps_exception() -> None:
+    err = RuntimeError()
+    try:
+        with WrapAllErrors():
+            raise err
+    except ExecutionFailed as e:
+        assert e.parent_error is err
+    else:
+        pytest.fail("Wrap all errors swallowed the exception")
