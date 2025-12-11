@@ -38,7 +38,7 @@ def admit_environment(environment: EnvironmentData, core: Core) -> None:
     cores[ident] = core
     refnanny[ident] = ref
 
-    logger.info(f"Admitted environment {environment!r} and {core!r} as with ID:{ident}.")
+    logger.debug(f"Admitted environment {environment!r} and {core!r} as with ID:{ident}.")
 
 
 def any_alive() -> bool:
@@ -72,7 +72,7 @@ def _is_core_still_used(ident: int) -> bool:
 
 
 def _add_tostage1(ident: int) -> None:
-    logger.info(f"Environment has died. Keeping core for a few gc-cycles. ID:{ident}")
+    logger.debug(f"Environment has died. Keeping core for a few gc-cycles. ID:{ident}")
     with lock:
         stage1.add(ident)
 
@@ -106,7 +106,7 @@ def _collectstage2(phase: Literal["start", "stop"], _: dict[str, int]) -> None:
 
             stage2.remove(ident)
             garbage.append(cores.pop(ident))
-            logger.info(f"Marking core {ident!r} for collection")
+            logger.debug(f"Marking core {ident!r} for collection")
 
         stage2.update(stage2_to_add)
         stage2_to_add = set()
