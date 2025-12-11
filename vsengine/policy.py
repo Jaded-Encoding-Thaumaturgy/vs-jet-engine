@@ -60,14 +60,15 @@ When reloading the application, you can call policy.unregister()
 
 from __future__ import annotations
 
-import contextlib
-import contextvars
-import logging
 import threading
-import weakref
+from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
+from logging import getLogger
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
+from weakref import ReferenceType, ref
 
 import vapoursynth as vs
 from vapoursynth import Environment, EnvironmentData, EnvironmentPolicy, EnvironmentPolicyAPI, register_policy
@@ -77,25 +78,25 @@ from vsengine._hospice import admit_environment
 __all__ = ["ContextVarStore", "GlobalStore", "ManagedEnvironment", "Policy", "ThreadLocalStore"]
 
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 
-class EnvironmentStore:
+class EnvironmentStore(ABC):
     """
     Environment Stores manage which environment is currently active.
     """
 
-    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
+    @abstractmethod
+    def set_current_environment(self, environment: ReferenceType[EnvironmentData] | None) -> None:
         """
         Set the current environment in the store.
         """
-        ...
 
-    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
+    @abstractmethod
+    def get_current_environment(self) -> ReferenceType[EnvironmentData] | None:
         """
         Retrieve the current environment from the store (if any)
         """
-        ...
 
 
 class GlobalStore(EnvironmentStore):
@@ -103,13 +104,13 @@ class GlobalStore(EnvironmentStore):
     This is the simplest store: It just stores the environment in a variable.
     """
 
-    _current: weakref.ReferenceType[EnvironmentData] | None
+    _current: ReferenceType[EnvironmentData] | None
     __slots__ = ("_current",)
 
-    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
+    def set_current_environment(self, environment: ReferenceType[EnvironmentData] | None) -> None:
         self._current = environment
 
-    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
+    def get_current_environment(self) -> ReferenceType[EnvironmentData] | None:
         return getattr(self, "_current", None)
 
 
@@ -125,10 +126,10 @@ class ThreadLocalStore(EnvironmentStore):
     def __init__(self) -> None:
         self._current = threading.local()
 
-    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
+    def set_current_environment(self, environment: ReferenceType[EnvironmentData] | None) -> None:
         self._current.environment = environment
 
-    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
+    def get_current_environment(self) -> ReferenceType[EnvironmentData] | None:
         return getattr(self._current, "environment", None)
 
 
@@ -137,15 +138,15 @@ class ContextVarStore(EnvironmentStore):
     If you are using AsyncIO or similar frameworks, use this store.
     """
 
-    _current: contextvars.ContextVar[weakref.ReferenceType[EnvironmentData] | None]
+    _current: ContextVar[ReferenceType[EnvironmentData] | None]
 
     def __init__(self, name: str = "vapoursynth") -> None:
-        self._current = contextvars.ContextVar(name)
+        self._current = ContextVar(name)
 
-    def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
+    def set_current_environment(self, environment: ReferenceType[EnvironmentData] | None) -> None:
         self._current.set(environment)
 
-    def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
+    def get_current_environment(self) -> ReferenceType[EnvironmentData] | None:
         return self._current.get(None)
 
 
@@ -231,7 +232,7 @@ class _ManagedPolicy(EnvironmentPolicy):
                 if environment is None:
                     self._store.set_current_environment(None)
                 else:
-                    self._store.set_current_environment(weakref.ref(environment))
+                    self._store.set_current_environment(ref(environment))
 
             if previous_environment is not None:
                 return previous_environment()
@@ -239,7 +240,7 @@ class _ManagedPolicy(EnvironmentPolicy):
         return None
 
 
-class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]):
+class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
     """
     Represents a VapourSynth environment that is managed by a policy.
     """
@@ -280,7 +281,7 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
         with self.inline_section():
             return vs.get_outputs()
 
-    @contextlib.contextmanager
+    @contextmanager
     def inline_section(self) -> Iterator[None]:
         """
         Private API!
@@ -303,7 +304,7 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
         finally:
             self._policy.managed.inline_section_end()
 
-    @contextlib.contextmanager
+    @contextmanager
     def use(self) -> Iterator[None]:
         """
         Switches to this environment within a block.
@@ -349,7 +350,7 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
         self.dispose()
 
 
-class Policy(contextlib.AbstractContextManager["Policy"]):
+class Policy(AbstractContextManager["Policy"]):
     """
     A managed policy is a very simple policy that just stores the environment
     data within the given store.

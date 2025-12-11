@@ -11,7 +11,7 @@ from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager
 from functools import wraps
 
-import vapoursynth
+import vapoursynth as vs
 
 __all__ = ["Cancelled", "EventLoop", "from_thread", "get_loop", "keep_environment", "set_loop", "to_thread"]
 
@@ -215,7 +215,7 @@ def keep_environment[**P, R](func: Callable[P, R]) -> Callable[P, R]:
     :return: A wrapped function that maintains the captured environment.
     """
     try:
-        environment = vapoursynth.get_current_environment().use
+        environment = vs.get_current_environment().use
     except RuntimeError:
         environment = _noop
 

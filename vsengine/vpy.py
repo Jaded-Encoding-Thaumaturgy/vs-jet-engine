@@ -48,7 +48,7 @@ from contextlib import AbstractContextManager
 from types import CodeType, ModuleType, NoneType, TracebackType
 from typing import Any, Concatenate, overload
 
-from vapoursynth import Environment, get_current_environment
+import vapoursynth as vs
 
 from ._futures import UnifiedFuture, unified
 from .loops import make_awaitable, to_thread
@@ -117,7 +117,7 @@ def chdir_runner[**P, R](
     return runner
 
 
-class AbstractScript[EnvironmentT: (Environment, ManagedEnvironment)](Awaitable[None]):
+class AbstractScript[EnvironmentT: (vs.Environment, ManagedEnvironment)](Awaitable[None]):
     environment: EnvironmentT
 
     _future: Future[None]
@@ -175,7 +175,7 @@ class AbstractScript[EnvironmentT: (Environment, ManagedEnvironment)](Awaitable[
             self.executor(WrapAllErrors(), self.module)
 
 
-class Script(AbstractScript[Environment]): ...
+class Script(AbstractScript[vs.Environment]): ...
 
 
 class ManagedScript(AbstractScript[ManagedEnvironment], AbstractContextManager[None]):
@@ -195,7 +195,7 @@ class ManagedScript(AbstractScript[ManagedEnvironment], AbstractContextManager[N
 @overload
 def load_file(
     script: str | os.PathLike[str],
-    environment: Environment | None = None,
+    environment: vs.Environment | None = None,
     *,
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
@@ -236,7 +236,7 @@ def load_file(
 
 def load_file(
     script: str | os.PathLike[str],
-    environment: Policy | Environment | Script | ManagedEnvironment | ManagedScript | None = None,
+    environment: Policy | vs.Environment | Script | ManagedEnvironment | ManagedScript | None = None,
     *,
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
@@ -267,7 +267,7 @@ def load_file(
 @overload
 def load_code(
     script: str | Buffer | ast.Module | ast.Expression | ast.Interactive | CodeType,
-    environment: Environment | None = None,
+    environment: vs.Environment | None = None,
     *,
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
@@ -308,7 +308,7 @@ def load_code(
 
 def load_code(
     script: str | Buffer | ast.Module | ast.Expression | ast.Interactive | CodeType,
-    environment: Policy | Environment | Script | ManagedEnvironment | ManagedScript | None = None,
+    environment: Policy | vs.Environment | Script | ManagedEnvironment | ManagedScript | None = None,
     *,
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
@@ -346,7 +346,7 @@ def load_code(
 
 def _load(
     executor: Executor,
-    environment: Policy | Environment | Script | ManagedEnvironment | ManagedScript | None = None,
+    environment: Policy | vs.Environment | Script | ManagedEnvironment | ManagedScript | None = None,
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
     chdir: str | os.PathLike[str] | None = None,
@@ -363,9 +363,9 @@ def _load(
     if isinstance(module, str):
         module = ModuleType(module)
 
-    if isinstance(environment, (Environment, NoneType)):
+    if isinstance(environment, (vs.Environment, NoneType)):
         if environment is None:
-            environment = get_current_environment()
+            environment = vs.get_current_environment()
 
         return Script(executor, module, environment, runner)
 
