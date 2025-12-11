@@ -7,8 +7,8 @@
 vsengine - A common set of function that bridge vapoursynth with your application.
 
 Parts:
+- loops:   Integrate vsengine with your event-loop (be it GUI-based or IO-based).
+- policy:  Create new isolated cores as needed.
 - video:   Get frames or render the video. Sans-IO and memory safe.
 - vpy:     Run .vpy-scripts in your application.
-- policy:  Create new isolated cores as needed.
-- loops:   Integrate vsengine with your event-loop (be it GUI-based or IO-based).
 """
