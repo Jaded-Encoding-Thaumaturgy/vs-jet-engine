@@ -108,14 +108,11 @@ class GlobalStore(EnvironmentStore):
     _current: weakref.ReferenceType[EnvironmentData] | None
     __slots__ = ("_current",)
 
-    def __init__(self) -> None:
-        self._current = None
-
     def set_current_environment(self, environment: weakref.ReferenceType[EnvironmentData] | None) -> None:
         self._current = environment
 
     def get_current_environment(self) -> weakref.ReferenceType[EnvironmentData] | None:
-        return self._current
+        return getattr(self, "_current", None)
 
 
 class ThreadLocalStore(EnvironmentStore):
@@ -159,17 +156,11 @@ class _ManagedPolicy(EnvironmentPolicy):
     This class directly interfaces with VapourSynth.
     """
 
-    _api: EnvironmentPolicyAPI | None
-    _store: EnvironmentStore
-    _mutex: threading.Lock
-    _local: threading.local
-
     __slots__ = ("_api", "_local", "_mutex", "_store")
 
     def __init__(self, store: EnvironmentStore) -> None:
         self._store = store
         self._mutex = threading.Lock()
-        self._api = None
         self._local = threading.local()
 
     # For engine-calls that require vapoursynth but
@@ -181,20 +172,21 @@ class _ManagedPolicy(EnvironmentPolicy):
 
     # End the section.
     def inline_section_end(self) -> None:
-        self._local.environment = None
+        del self._local.environment
 
     @property
     def api(self) -> EnvironmentPolicyAPI:
-        if self._api is None:
-            raise RuntimeError("Invalid state: No access to the current API")
-        return self._api
+        if hasattr(self, "_api"):
+            return self._api
+
+        raise RuntimeError("Invalid state: No access to the current API")
 
     def on_policy_registered(self, special_api: EnvironmentPolicyAPI) -> None:
         logger.debug("Successfully registered policy with VapourSynth.")
         self._api = special_api
 
     def on_policy_cleared(self) -> None:
-        self._api = None
+        del self._api
         logger.debug("Policy cleared.")
 
     def get_current_environment(self) -> EnvironmentData | None:
@@ -250,9 +242,6 @@ class _ManagedPolicy(EnvironmentPolicy):
 
 
 class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]):
-    _environment: Environment
-    _data: EnvironmentData | None
-    _policy: Policy
     __slots__ = ("_data", "_environment", "_policy")
 
     def __init__(self, environment: Environment, data: EnvironmentData, policy: Policy) -> None:
@@ -300,7 +289,7 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
         - Do not use __enter__ and __exit__ directly.
         - This function is not reentrant.
         """
-        self._policy.managed.inline_section_start(self._data)  # type: ignore
+        self._policy.managed.inline_section_start(self._data)
         try:
             yield
         finally:
@@ -331,16 +320,16 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
             return
 
         logger.debug(f"Disposing environment {self._data!r}.")
-        admit_environment(self._data, self.core)  # type: ignore
-        self._policy.api.destroy_environment(self._data)  # type: ignore
-        self._data = None
+        admit_environment(self._data, self.core)
+        self._policy.api.destroy_environment(self._data)
+        del self._data
 
     @property
     def disposed(self) -> bool:
         """
         Checks if the environment is disposed
         """
-        return self._data is None
+        return hasattr(self, "_data")
 
     def __enter__(self) -> Self:
         return self
@@ -349,7 +338,7 @@ class ManagedEnvironment(contextlib.AbstractContextManager["ManagedEnvironment"]
         self.dispose()
 
     def __del__(self) -> None:
-        if self._data is None:
+        if self.disposed:
             return
 
         import warnings

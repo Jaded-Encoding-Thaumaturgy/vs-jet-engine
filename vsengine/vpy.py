@@ -122,6 +122,8 @@ def chdir_runner[**P, R](
 class AbstractScript[EnvironmentT: (Environment, ManagedEnvironment)](Awaitable[None]):
     environment: EnvironmentT
 
+    _future: Future[None]
+
     def __init__(
         self,
         executor: Executor,
@@ -133,7 +135,6 @@ class AbstractScript[EnvironmentT: (Environment, ManagedEnvironment)](Awaitable[
         self.environment = environment
         self.runner = runner
         self.module = module
-        self._future: Future[None] | None = None
 
     def __await__(self) -> Generator[Any, None, None]:
         """
@@ -154,8 +155,11 @@ class AbstractScript[EnvironmentT: (Environment, ManagedEnvironment)](Awaitable[
         It returns a future which completes when the script completes.
         When the script fails, it raises a ExecutionFailed.
         """
-        if self._future is None:
-            self._future = self.runner(self._run_inline)
+        if hasattr(self, "_future"):
+            return self._future
+
+        self._future = self.runner(self._run_inline)
+
         return self._future
 
     def result(self) -> None:
