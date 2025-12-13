@@ -361,8 +361,9 @@ class Policy(AbstractContextManager["Policy"]):
 
     _managed: _ManagedPolicy
 
-    def __init__(self, store: EnvironmentStore) -> None:
+    def __init__(self, store: EnvironmentStore, flags_creation: int = 0) -> None:
         self._managed = _ManagedPolicy(store)
+        self.flags_creation = flags_creation
 
     def register(self) -> None:
         """
@@ -393,7 +394,7 @@ class Policy(AbstractContextManager["Policy"]):
         For convenience, a managed environment will also serve as a
         context-manager that disposes the environment automatically.
         """
-        data = self.api.create_environment()
+        data = self.api.create_environment(self.flags_creation)
         env = self.api.wrap_environment(data)
         logger.debug("Created new environment")
         return ManagedEnvironment(env, data, self)
