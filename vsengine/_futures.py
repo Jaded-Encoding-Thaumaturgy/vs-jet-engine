@@ -16,9 +16,7 @@ from typing import Any, Literal, Self, overload
 from vsengine.loops import Cancelled, get_loop, keep_environment
 
 
-class UnifiedFuture[T](
-    Future[T], AbstractContextManager[Any, Any], AbstractAsyncContextManager[Any, Any], Awaitable[T]
-):
+class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncContextManager[T, Any], Awaitable[T]):
     @classmethod
     def from_call[**P](cls, func: Callable[P, Future[T]], *args: P.args, **kwargs: P.kwargs) -> Self:
         try:
@@ -103,7 +101,7 @@ class UnifiedFuture[T](
         return self.then(None, cb)
 
     # Nicer Syntax
-    def __enter__(self) -> Any:
+    def __enter__(self) -> T:
         obj = self.result()
 
         if isinstance(obj, AbstractContextManager):
@@ -125,7 +123,7 @@ class UnifiedFuture[T](
     def __await__(self) -> Generator[Any, None, T]:
         return self.awaitable().__await__()
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> T:
         result = await self.awaitable()
 
         if isinstance(result, AbstractAsyncContextManager):
