@@ -6,13 +6,13 @@
 """
 vsengine.vpy runs vpy-scripts for you.
 
-    >>> load_file("/path/to/my/script").result()
+    >>> load_script("/path/to/my/script").result()
     >>> load_code("print('Hello, World!')").result()
 
-load_file() and load_code() will create a Script-object which allows
+load_script() and load_code() will create a Script-object which allows
 you to run the script and access its environment.
 
-load_file() takes a path as the first argument while load_code() accepts
+load_script() takes a path as the first argument while load_code() accepts
 code (either compiled, parsed or as a string/bytes) and returns the Script-
 object.
 
@@ -54,7 +54,7 @@ from ._futures import UnifiedFuture, unified
 from .loops import make_awaitable, to_thread
 from .policy import ManagedEnvironment, Policy
 
-__all__ = ["ExecutionFailed", "load_code", "load_file"]
+__all__ = ["ExecutionFailed", "load_code", "load_script"]
 
 type Runner[R] = Callable[[Callable[[], R]], Future[R]]
 type Executor = Callable[[WrapAllErrors, ModuleType], None]
@@ -193,7 +193,7 @@ class ManagedScript(AbstractScript[ManagedEnvironment], AbstractContextManager[N
 
 
 @overload
-def load_file(
+def load_script(
     script: str | os.PathLike[str],
     environment: vs.Environment | None = None,
     *,
@@ -204,7 +204,7 @@ def load_file(
 
 
 @overload
-def load_file(
+def load_script(
     script: str | os.PathLike[str],
     environment: Script,
     *,
@@ -214,7 +214,7 @@ def load_file(
 
 
 @overload
-def load_file(
+def load_script(
     script: str | os.PathLike[str],
     environment: Policy | ManagedEnvironment,
     *,
@@ -225,7 +225,7 @@ def load_file(
 
 
 @overload
-def load_file(
+def load_script(
     script: str | os.PathLike[str],
     environment: ManagedScript,
     *,
@@ -234,7 +234,7 @@ def load_file(
 ) -> ManagedScript: ...
 
 
-def load_file(
+def load_script(
     script: str | os.PathLike[str],
     environment: Policy | vs.Environment | Script | ManagedEnvironment | ManagedScript | None = None,
     *,
