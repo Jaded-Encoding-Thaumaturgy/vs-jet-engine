@@ -143,7 +143,7 @@ def render(
                     case _:
                         raise NotImplementedError
             case _:
-                raise ValueError("Can only use GRAY and YUV for V4M-Streams")
+                raise ValueError("Can only use GRAY and YUV for Y4M-Streams")
 
         if node.format.bits_per_sample > 8:
             y4mformat += f"p{node.format.bits_per_sample}"
