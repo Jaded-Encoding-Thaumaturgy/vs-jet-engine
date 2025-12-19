@@ -166,9 +166,15 @@ class AbstractScript[EnvironmentT: (vs.Environment, ManagedEnvironment)](Awaitab
         """
         self.run().result()
 
+    @overload
     @unified(kind="future")
-    def get_variable(self, name: str, default: str | None = None) -> Future[str | None]:
-        return UnifiedFuture[str | None].resolve(getattr(self.module, name, default))
+    def get_variable(self, name: str, default: None = None) -> Future[Any | None]: ...
+    @overload
+    @unified(kind="future")
+    def get_variable[T](self, name: str, default: T) -> Future[Any | T]: ...
+    @unified(kind="future")
+    def get_variable(self, name: str, default: Any = None) -> Future[Any]:
+        return UnifiedFuture[Any].resolve(getattr(self.module, name, default))
 
     def _run_inline(self) -> dict[str, Any]:
         with self.environment.use():
