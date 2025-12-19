@@ -46,7 +46,7 @@ from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
 from contextlib import AbstractContextManager
 from types import CodeType, ModuleType, NoneType, TracebackType
-from typing import Any, Concatenate, overload
+from typing import Any, Concatenate, Self, overload
 
 import vapoursynth as vs
 
@@ -184,9 +184,9 @@ class AbstractScript[EnvironmentT: (vs.Environment, ManagedEnvironment)](Awaitab
 class Script(AbstractScript[vs.Environment]): ...
 
 
-class ManagedScript(AbstractScript[ManagedEnvironment], AbstractContextManager[None]):
-    def __enter__(self) -> None:
-        return None
+class ManagedScript(AbstractScript[ManagedEnvironment], AbstractContextManager["ManagedScript"]):
+    def __enter__(self) -> Self:
+        return self
 
     def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
         self.dispose()
