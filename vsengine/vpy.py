@@ -413,13 +413,13 @@ def _load(
     if chdir is not None:
         runner = chdir_runner(chdir, runner)
 
-    if isinstance(module, str):
-        module = ModuleType(module)
-
     if isinstance(environment, Script):
         module = environment.module
         environment = environment.environment
-    elif environment is None:
+    elif isinstance(module, str):
+        module = ModuleType(module)
+
+    if environment is None:
         environment = vs.get_current_environment()
     elif isinstance(environment, vs.Environment):
         return Script(executor, module, environment, runner)
