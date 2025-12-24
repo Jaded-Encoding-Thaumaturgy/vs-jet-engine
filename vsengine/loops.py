@@ -161,7 +161,7 @@ class _NoEventLoop(EventLoop):
 
 
 NO_LOOP = _NoEventLoop()
-current_loop: EventLoop = NO_LOOP
+_current_loop: EventLoop = NO_LOOP
 
 
 def get_loop() -> EventLoop:
@@ -170,7 +170,7 @@ def get_loop() -> EventLoop:
 
     :return: The currently running EventLoop instance.
     """
-    return current_loop
+    return _current_loop
 
 
 def set_loop(loop: EventLoop) -> None:
@@ -183,14 +183,14 @@ def set_loop(loop: EventLoop) -> None:
 
     :param loop: The EventLoop instance to attach.
     """
-    global current_loop
-    current_loop.detach()
+    global _current_loop
+    _current_loop.detach()
 
     try:
-        current_loop = loop
+        _current_loop = loop
         loop.attach()
     except:
-        current_loop = NO_LOOP
+        _current_loop = NO_LOOP
         raise
 
 
@@ -249,7 +249,7 @@ def to_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -
     :param func: The function to call in a worker thread.
     :param args: The arguments for the function.
     :param kwargs: The keyword arguments to pass to the function.
-    :return: A loop-specific Future object.
+    :return: A Future representing the execution result.
     """
 
     @keep_environment
