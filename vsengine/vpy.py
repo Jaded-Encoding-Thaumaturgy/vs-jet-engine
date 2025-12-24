@@ -314,6 +314,7 @@ def load_code(
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
     chdir: str | os.PathLike[str] | None = None,
+    **kwargs: Any,
 ) -> Script[vs.Environment]: ...
 
 
@@ -324,6 +325,7 @@ def load_code(
     *,
     inline: bool = True,
     chdir: str | os.PathLike[str] | None = None,
+    **kwargs: Any,
 ) -> Script[vs.Environment]: ...
 
 
@@ -335,6 +337,7 @@ def load_code(
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
     chdir: str | os.PathLike[str] | None = None,
+    **kwargs: Any,
 ) -> Script[ManagedEnvironment]: ...
 
 
@@ -345,6 +348,7 @@ def load_code(
     *,
     inline: bool = True,
     chdir: str | os.PathLike[str] | None = None,
+    **kwargs: Any,
 ) -> Script[ManagedEnvironment]: ...
 
 
@@ -355,6 +359,7 @@ def load_code(
     module: str | ModuleType = "__vapoursynth__",
     inline: bool = True,
     chdir: str | os.PathLike[str] | None = None,
+    **kwargs: Any,
 ) -> Script[Any]:
     """
     Runs the given code snippet.
@@ -372,13 +377,19 @@ def load_code(
     """
 
     def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
-        nonlocal script
+        nonlocal script, kwargs
 
         with ctx:
             if isinstance(script, CodeType):
                 code = script
             else:
-                code = compile(script, filename="<runvpy>", dont_inherit=True, flags=0, mode="exec")
+                compile_args: dict[str, Any] = {
+                    "filename": "<runvpy>",
+                    "dont_inherit": True,
+                    "flags": 0,
+                    "mode": "exec",
+                } | kwargs
+                code = compile(script, **compile_args)
 
             exec(code, module.__dict__, module.__dict__)
 
