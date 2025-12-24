@@ -36,7 +36,7 @@ tailored for different uses and concurrency needs:
   that can run multiple environments at once. This one behaves like vsscript.
 
 - ContextVarStore is useful when you are using event-loops like asyncio,
-  curio, and trio. When using this store, make sure to reuse the store
+  or trio. When using this store, make sure to reuse the store
   between successive Policy-instances as otherwise the old store might
   leak objects. More details are written in the documentation of the
   contextvars module of the standard library.
