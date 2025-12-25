@@ -4,7 +4,7 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 
-"""Integrate vsengine with your event-loop (be it GUI-based or IO-based)."""
+"""This module provides an abstraction layer to integrate VapourSynth with any event loop (asyncio, Qt, Trio, etc.)."""
 
 import threading
 from abc import ABC, abstractmethod

@@ -3,36 +3,7 @@
 # Copyright (C) 2025  Jaded-Encoding-Thaumaturgy
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
-"""
-vsengine.vpy runs vpy-scripts for you.
-
-    >>> load_script("/path/to/my/script").result()
-    >>> load_code("print('Hello, World!')").result()
-
-load_script() and load_code() will create a Script-object which allows
-you to run the script and access its environment.
-
-load_script() takes a path as the first argument while load_code() accepts
-code (either compiled, parsed or as a string/bytes) and returns the Script-
-object.
-
-Both methods accept an optional second argument which can either be an
-environment or a policy. If it's an environment, it will run the script
-in that environment. If it's a policy, it will create a new environment and
-store the environment within the environment-attribute of the Script-instance,
-which you have to dispose manually.
-
-Additional keyword arguments include inline, which defaults to true, will
-run the script in a separate worker thread, when set to false. Another
-keyword argument is chdir, which will change the current directory during
-execution.
-
-A Script object has the function run() which returns a future which will
-reject with ExecutionError or with resolve with None.
-
-A Script-instance is awaitable, in which it will await the completion of the
-script.
-"""
+"""This module provides functions to load and execute VapourSynth scripts (`.vpy` files) or inline code."""
 
 from __future__ import annotations
 
@@ -63,8 +34,8 @@ class ExecutionError(Exception):
     Exception raised when script execution fails.
     """
 
-    #: It contains the actual exception that has been raised.
     parent_error: BaseException
+    """The actual exception that has been raised"""
 
     def __init__(self, parent_error: BaseException) -> None:
         """
@@ -201,7 +172,7 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
         return self.run().result()
 
     def dispose(self) -> None:
-        """Disposes the managed environment."""
+        """Disposes the managed environment and clears the module globals."""
         self.module.__dict__.clear()
 
         if isinstance(self.environment, ManagedEnvironment):

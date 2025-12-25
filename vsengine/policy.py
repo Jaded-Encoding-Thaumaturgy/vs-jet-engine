@@ -4,58 +4,8 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 """
-vsengine.policy implements a basic object-oriented implementation of
-EnvironmentPolicies.
-
-
-Here is a quick run-down in how to use it, (but be sure to read on to select
-the best store-implementation for you):
-
-    >>> import vapoursynth as vs
-    >>> with Policy(GlobalStore()) as policy:
-    ...     with policy.new_environment() as env:
-    ...         with env.use():
-    ...             vs.core.std.BlankClip().set_output()
-    ...         print(env.outputs)
-    {0: <vapoursynth.VideoOutputTuple ...>}
-
-
-To use it, you first have to pick an EnvironmentStore implementation.
-An EnvironmentStore is just a simple object implementing the methods
-set_current_environment and get_current_environment.
-These actually implement the state an EnvironmentPolicy is responsible
-for managing.
-
-For convenience, three EnvironmentStores have already been implemented,
-tailored for different uses and concurrency needs:
-
-- The GlobalStore is useful when you are ever only using one Environment
-  at the same time.
-
-- ThreadLocalStore is useful when you are writing multi-threaded applications,
-  that can run multiple environments at once. This one behaves like vsscript.
-
-- ContextVarStore is useful when you are using event-loops like asyncio,
-  or trio. When using this store, make sure to reuse the store
-  between successive Policy-instances as otherwise the old store might
-  leak objects. More details are written in the documentation of the
-  contextvars module of the standard library.
-
-All three implementations can be instantiated without any arguments.
-
-
-The instance of the EnvironmentStore is then passed to Policy, on which
-you then call register on.
-
-You can create ManagedEnvironment-instances by calling
-policy.new_environment(). These instances can then be used to switch to
-the given environment, retrieve its outputs or get its core.
-
-Be aware that ManagedEnvironment-instances must call dispose() when
-you are done using them. Failing to do so will result in a warning.
-ManagedEnvironment is also a context-manager which does it for you.
-
-When reloading the application, you can call policy.unregister()
+This module implements VapourSynth's Environment Policy system,
+allowing you to manage multiple VapourSynth environments within a single application.
 """
 
 from __future__ import annotations

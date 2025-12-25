@@ -14,15 +14,21 @@ pip install vsjetengine
 
 ## Using vsengine
 
-Look at this example:
+```python
+from vsengine.policy import GlobalStore, Policy
+from vsengine.vpy import load_script
 
-```py
-import vapoursynth as vs
-from vsengine.vpy import script
+with Policy(GlobalStore()) as policy, load_script("/path/to/script.vpy", policy) as script:
+    outputs = script.environment.outputs
+    print(outputs)
 
-script("/script/to/my.vpy").result()
-vs.get_output(0).output()
 ```
+
+## Documentation
+
+- **[Environment Policy](docs/policy.md)** - Managing VapourSynth environments with stores
+- **[Event Loops](docs/loops.md)** - Integration with asyncio, Trio, and custom loops
+- **[Script Execution](docs/vpy.md)** - Loading and running VapourSynth scripts
 
 ## Contributing
 
