@@ -1,4 +1,4 @@
-# vs-jet-engine
+# vs-jet-engine 🚀
 
 [![Lint](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/lint.yml/badge.svg)](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/lint.yml)
 [![Tests](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/test.yml/badge.svg)](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/test.yml)
