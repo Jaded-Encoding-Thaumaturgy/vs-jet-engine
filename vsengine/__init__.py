@@ -12,3 +12,17 @@ Parts:
 - video:   Get frames or render the video. Sans-IO and memory safe.
 - vpy:     Run .vpy-scripts in your application.
 """
+
+from vsengine.loops import *
+from vsengine.policy import *
+from vsengine.video import *
+from vsengine.vpy import *
+
+__version__: str
+__version_tuple__: tuple[int | str, ...]
+
+try:
+    from ._version import __version__, __version_tuple__
+except ImportError:
+    __version__ = "0.0.0+unknown"
+    __version_tuple__ = (0, 0, 0, "+unknown")

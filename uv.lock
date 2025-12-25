@@ -382,17 +382,13 @@ wheels = [
 ]
 
 [[package]]
-name = "vsengine"
-version = "0.2.0+jet"
+name = "vsengine-jet"
 source = { editable = "." }
 dependencies = [
     { name = "vapoursynth" },
 ]
 
 [package.optional-dependencies]
-test = [
-    { name = "pytest" },
-]
 trio = [
     { name = "trio" },
 ]
@@ -408,11 +404,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pytest", marker = "extra == 'test'" },
     { name = "trio", marker = "extra == 'trio'" },
     { name = "vapoursynth", specifier = ">=69" },
 ]
-provides-extras = ["trio", "test"]
+provides-extras = ["trio"]
 
 [package.metadata.requires-dev]
 dev = [

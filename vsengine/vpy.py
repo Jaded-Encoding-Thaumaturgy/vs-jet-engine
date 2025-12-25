@@ -52,7 +52,7 @@ from ._futures import UnifiedFuture, unified
 from .loops import make_awaitable, to_thread
 from .policy import ManagedEnvironment, Policy
 
-__all__ = ["ExecutionError", "load_code", "load_script"]
+__all__ = ["ExecutionError", "Script", "load_code", "load_script"]
 
 type Runner[R] = Callable[[Callable[[], R]], Future[R]]
 type Executor[T] = Callable[[WrapAllErrors, ModuleType], T]

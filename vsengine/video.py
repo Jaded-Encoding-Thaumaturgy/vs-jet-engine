@@ -17,6 +17,8 @@ from vsengine._helpers import use_inline
 from vsengine._nodes import buffer_futures, close_when_needed
 from vsengine.policy import ManagedEnvironment
 
+__all__ = ["frame", "frames", "planes", "render"]
+
 
 @unified(kind="future")
 def frame(
@@ -150,7 +152,7 @@ def render(
 
         y4mformat = "C" + y4mformat + " "
 
-        data = "YUV4MPEG2 {y4mformat}W{width} H{height} F{fps_num}:{fps_den} Ip A0:0 XLENGTH={length}\n".format(
+        data = "YUV4MPEG2 {y4mformat}W{width} H{height} F{fps_num}:{fps_den} Ip A0:0 XLENGTH={length}\n".format(  # noqa: UP032
             y4mformat=y4mformat,
             width=node.width,
             height=node.height,
