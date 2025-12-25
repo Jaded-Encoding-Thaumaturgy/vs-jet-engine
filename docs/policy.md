@@ -244,6 +244,41 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+#### Example: Trio Processing
+
+```python
+import trio
+import vapoursynth as vs
+
+from vsengine.policy import ContextVarStore, Policy
+
+
+async def trio_worker(policy: Policy, name: str) -> None:
+    with policy.new_environment() as env, env.use():
+        print(f"[{name}] Started with env {id(env)}")
+
+        # Yield control to allow other tasks to run.
+        # Context is preserved across await points with ContextVarStore
+        await trio.sleep(0.1)
+
+        # Access the underlying core from the proxy
+        is_correct = vs.core.core == env.core
+        print(f"[{name}] Finished. Correct Core? {is_correct}")
+
+
+async def main() -> None:
+    policy = Policy(ContextVarStore())
+
+    with policy:
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(trio_worker, policy, "Task-A")
+            nursery.start_soon(trio_worker, policy, "Task-B")
+            nursery.start_soon(trio_worker, policy, "Task-C")
+
+
+trio.run(main)
+```
+
 ---
 
 ## Store Selection Guide
