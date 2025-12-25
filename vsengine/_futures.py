@@ -97,7 +97,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncC
     def map[V](self, cb: Callable[[T], V]) -> UnifiedFuture[V]:
         return self.then(cb, None)
 
-    def catch[V](self, cb: Callable[[BaseException], V]) -> UnifiedFuture[V]:
+    def catch[V](self, cb: Callable[[BaseException], V]) -> UnifiedFuture[T | V]:
         return self.then(None, cb)
 
     # Nicer Syntax

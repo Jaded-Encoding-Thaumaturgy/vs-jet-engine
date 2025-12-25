@@ -30,9 +30,10 @@ from typing import Any
 import vapoursynth as vs
 from vapoursynth import Core, EnvironmentData, EnvironmentPolicy, EnvironmentPolicyAPI, core
 
+from vsengine import policy as vsengine_policy
 from vsengine._hospice import admit_environment
 
-__all__ = ["BLACKBOARD", "forcefully_unregister_policy", "use_standalone_policy", "wrap_test_for_asyncio"]
+__all__ = ["BLACKBOARD", "forcefully_unregister_policy", "use_standalone_policy"]
 
 
 BLACKBOARD = dict[Any, Any]()
@@ -58,7 +59,7 @@ class ProxyPolicy(EnvironmentPolicy):
 
         self._policy = policy
         try:
-            policy.on_policy_registered(EnvironmentPolicyAPIWrapper(self._api, self))
+            policy.on_policy_registered(EnvironmentPolicyAPIWrapper(self._api, self))  # type: ignore[arg-type]
         except:
             self._policy = None
             raise
@@ -77,7 +78,9 @@ class ProxyPolicy(EnvironmentPolicy):
 
     def on_policy_registered(self, special_api: EnvironmentPolicyAPI) -> None:
         self._api = special_api
+        # Patch both vapoursynth.register_policy and vsengine.policy.register_policy
         vs.register_policy = self.attach_policy_to_proxy
+        vsengine_policy.register_policy = self.attach_policy_to_proxy  # type: ignore[attr-defined]
 
     def on_policy_cleared(self) -> None:
         try:
@@ -87,6 +90,7 @@ class ProxyPolicy(EnvironmentPolicy):
             self._policy = None
             self._api = None
             vs.register_policy = orig_register_policy
+            vsengine_policy.register_policy = orig_register_policy  # type: ignore[attr-defined]
 
     def get_current_environment(self) -> EnvironmentData | None:
         if self._policy is None:
@@ -104,15 +108,13 @@ class ProxyPolicy(EnvironmentPolicy):
         return self._policy.is_alive(environment)
 
 
-class StandalonePolicy:
-    _current: EnvironmentData | None
-    _api: EnvironmentPolicyAPI | None
-    _core: Core | None
-    __slots__ = ("_api", "_core", "_current")
+class StandalonePolicy(EnvironmentPolicy):
+    """A simple standalone policy that uses a single environment."""
 
-    def __init__(self) -> None:
-        self._current = None
-        self._api = None
+    _current: EnvironmentData
+    _api: EnvironmentPolicyAPI
+    _core: Core
+    __slots__ = ("_api", "_core", "_current")
 
     def on_policy_registered(self, special_api: EnvironmentPolicyAPI) -> None:
         self._api = special_api
@@ -120,14 +122,12 @@ class StandalonePolicy:
         self._core = core.core
 
     def on_policy_cleared(self) -> None:
-        assert self._api is not None
-
         admit_environment(self._current, self._core)
 
-        self._current = None
-        self._core = None
+        del self._current
+        del self._core
 
-    def get_current_environment(self) -> EnvironmentData | None:
+    def get_current_environment(self) -> EnvironmentData:
         return self._current
 
     def set_environment(self, environment: EnvironmentData | None) -> EnvironmentData | None:
@@ -166,20 +166,5 @@ forcefully_unregister_policy = _policy.forcefully_unregister_policy
 
 
 def use_standalone_policy() -> None:
-    _policy.attach_policy_to_proxy(StandalonePolicy())  # type: ignore
-
-
-def wrap_test_for_asyncio(func):  # type: ignore
-    import asyncio
-
-    from vsengine.adapters.asyncio import AsyncIOLoop
-    from vsengine.loops import set_loop
-
-    def test_case(self) -> None:  # type: ignore
-        async def _run() -> None:
-            set_loop(AsyncIOLoop())
-            await func(self)
-
-        asyncio.run(_run())
-
-    return test_case
+    """Register a standalone policy for tests that don't need custom policies."""
+    _policy.attach_policy_to_proxy(StandalonePolicy())

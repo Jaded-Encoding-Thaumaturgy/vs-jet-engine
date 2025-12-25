@@ -1,340 +1,378 @@
 # vs-engine
 # Copyright (C) 2022  cid-chan
+# Copyright (C) 2025  Jaded-Encoding-Thaumaturgy
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
+"""Tests for the unified future system."""
 
 import contextlib
 import threading
-import unittest
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import Future
+from typing import Any
 
-from tests._testutils import wrap_test_for_asyncio
+import pytest
+
 from vsengine._futures import UnifiedFuture, UnifiedIterator, unified
+from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.loops import NO_LOOP, set_loop
 
 
-def resolve(value):
-    fut = Future()
+def resolve(value: Any) -> Future[Any]:
+    fut = Future[Any]()
     fut.set_result(value)
     return fut
 
 
-def reject(err):
-    fut = Future()
+def reject(err: BaseException) -> Future[Any]:
+    fut = Future[Any]()
     fut.set_exception(err)
     return fut
 
 
-def contextmanager():
+def contextmanager_helper() -> Future[Any]:
     @contextlib.contextmanager
-    def noop():
+    def noop() -> Iterator[int]:
         yield 1
 
     return resolve(noop())
 
 
-def asynccontextmanager():
+def asynccontextmanager_helper() -> Future[Any]:
     @contextlib.asynccontextmanager
-    async def noop():
+    async def noop() -> AsyncIterator[int]:
         yield 2
 
     return resolve(noop())
 
 
-def succeeds():
+def succeeds() -> Future[int]:
     return resolve(1)
 
 
-def fails():
+def fails() -> Future[Any]:
     return reject(RuntimeError())
 
 
-def fails_early():
+def fails_early() -> Future[Any]:
     raise RuntimeError()
 
 
-def future_iterator():
+def future_iterator() -> Iterator[Future[int]]:
     n = 0
     while True:
         yield resolve(n)
         n += 1
 
 
-class WrappedUnifiedFuture(UnifiedFuture):
-    pass
+class WrappedUnifiedFuture(UnifiedFuture[Any]): ...
 
 
-class WrappedUnifiedIterable(UnifiedIterator):
-    pass
+class WrappedUnifiedIterable(UnifiedIterator[Any]): ...
 
 
-class TestUnifiedFuture(unittest.TestCase):
-    @wrap_test_for_asyncio
-    async def test_is_await(self):
-        await UnifiedFuture.from_call(succeeds)
-
-    @wrap_test_for_asyncio
-    async def test_awaitable(self):
-        await UnifiedFuture.from_call(succeeds).awaitable()
-
-    @wrap_test_for_asyncio
-    async def test_async_context_manager_async(self):
-        async with UnifiedFuture.from_call(asynccontextmanager) as v:
-            self.assertEqual(v, 2)
-
-    @wrap_test_for_asyncio
-    async def test_context_manager_async(self):
-        async with UnifiedFuture.from_call(contextmanager) as v:
-            self.assertEqual(v, 1)
-
-    def test_context_manager(self):
-        with UnifiedFuture.from_call(contextmanager) as v:
-            self.assertEqual(v, 1)
-
-    def test_map(self):
-        def _crash(v):
-            raise RuntimeError(str(v))
-
-        future = UnifiedFuture.from_call(succeeds)
-        new_future = future.map(lambda v: str(v))
-        self.assertEqual(new_future.result(), "1")
-
-        new_future = future.map(_crash)
-        self.assertIsInstance(new_future.exception(), RuntimeError)
-
-        future = UnifiedFuture.from_call(fails)
-        new_future = future.map(lambda v: str(v))
-        self.assertIsInstance(new_future.exception(), RuntimeError)
-
-    def test_catch(self):
-        def _crash(_):
-            raise RuntimeError("test")
-
-        future = UnifiedFuture.from_call(fails)
-        new_future = future.catch(lambda e: e.__class__.__name__)
-        self.assertEqual(new_future.result(), "RuntimeError")
-
-        new_future = future.catch(_crash)
-        self.assertIsInstance(new_future.exception(), RuntimeError)
-
-        future = UnifiedFuture.from_call(succeeds)
-        new_future = future.catch(lambda v: str(v))
-        self.assertEqual(new_future.result(), 1)
-
-    @wrap_test_for_asyncio
-    async def test_add_loop_callback(self):
-        def _init_thread(fut):
-            fut.set_result(threading.current_thread())
-
-        fut = Future()
-        thr = threading.Thread(target=lambda: _init_thread(fut))
-
-        def _wrapper():
-            return fut
-
-        fut = UnifiedFuture.from_call(_wrapper)
-
-        loop_thread = None
-
-        def _record_loop_thr(_):
-            nonlocal loop_thread
-            loop_thread = threading.current_thread()
-
-        fut.add_loop_callback(_record_loop_thr)
-        thr.start()
-        cb_thread = await fut
-
-        self.assertNotEqual(cb_thread, loop_thread)
+# UnifiedFuture tests
 
 
-class UnifiedIteratorTest(unittest.TestCase):
-    def test_run_as_completed_succeeds(self):
-        set_loop(NO_LOOP)
-        my_futures = [Future(), Future()]
-        results = []
+@pytest.mark.asyncio
+async def test_unified_future_is_await() -> None:
+    set_loop(AsyncIOLoop())
+    await UnifiedFuture.from_call(succeeds)
 
-        def _add_to_result(f):
+
+@pytest.mark.asyncio
+async def test_unified_future_awaitable() -> None:
+    set_loop(AsyncIOLoop())
+    await UnifiedFuture.from_call(succeeds).awaitable()
+
+
+@pytest.mark.asyncio
+async def test_unified_future_async_context_manager_async() -> None:
+    set_loop(AsyncIOLoop())
+    async with UnifiedFuture.from_call(asynccontextmanager_helper) as v:
+        assert v == 2
+
+
+@pytest.mark.asyncio
+async def test_unified_future_context_manager_async() -> None:
+    set_loop(AsyncIOLoop())
+    async with UnifiedFuture.from_call(contextmanager_helper) as v:
+        assert v == 1
+
+
+def test_unified_future_context_manager() -> None:
+    with UnifiedFuture.from_call(contextmanager_helper) as v:
+        assert v == 1
+
+
+def test_unified_future_map() -> None:
+    def _crash(v: Any) -> str:
+        raise RuntimeError(str(v))
+
+    future = UnifiedFuture.from_call(succeeds)
+    new_future = future.map(lambda v: str(v))
+    assert new_future.result() == "1"
+
+    new_future = future.map(_crash)
+    assert isinstance(new_future.exception(), RuntimeError)
+
+    future = UnifiedFuture.from_call(fails)
+    new_future = future.map(lambda v: str(v))
+    assert isinstance(new_future.exception(), RuntimeError)
+
+
+def test_unified_future_catch() -> None:
+    def _crash(_: BaseException) -> str:
+        raise RuntimeError("test")
+
+    future = UnifiedFuture.from_call(fails)
+    new_future = future.catch(lambda e: e.__class__.__name__)
+    assert new_future.result() == "RuntimeError"
+
+    new_future = future.catch(_crash)
+    assert isinstance(new_future.exception(), RuntimeError)
+
+    future = UnifiedFuture.from_call(succeeds)
+    new_future = future.catch(lambda v: str(v))
+    # Result is 1 because the future succeeded (no exception to catch)
+    result = new_future.result()
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_unified_future_add_loop_callback() -> None:
+    from vsengine.adapters.asyncio import AsyncIOLoop
+    from vsengine.loops import set_loop
+
+    set_loop(AsyncIOLoop())
+
+    def _init_thread(fut: Future[threading.Thread]) -> None:
+        fut.set_result(threading.current_thread())
+
+    fut: Future[threading.Thread] = Future()
+    thr = threading.Thread(target=lambda: _init_thread(fut))
+
+    def _wrapper() -> Future[threading.Thread]:
+        return fut
+
+    unified_fut = UnifiedFuture.from_call(_wrapper)
+
+    loop_thread: threading.Thread | None = None
+
+    def _record_loop_thr(_: Any) -> None:
+        nonlocal loop_thread
+        loop_thread = threading.current_thread()
+
+    unified_fut.add_loop_callback(_record_loop_thr)
+    thr.start()
+    cb_thread = await unified_fut
+
+    assert cb_thread != loop_thread
+
+
+# UnifiedIterator tests
+
+
+def test_unified_iterator_run_as_completed_succeeds() -> None:
+    set_loop(NO_LOOP)
+    my_futures: list[Future[int]] = [Future(), Future()]
+    results: list[int] = []
+
+    def _add_to_result(f: Future[int]) -> None:
+        results.append(f.result())
+
+    state = UnifiedIterator(iter(my_futures)).run_as_completed(_add_to_result)
+    assert not state.done()
+    my_futures[1].set_result(2)
+    assert not state.done()
+    my_futures[0].set_result(1)
+    assert state.done()
+    assert state.result() is None
+    assert results == [1, 2]
+
+
+def test_unified_iterator_run_as_completed_forwards_errors() -> None:
+    set_loop(NO_LOOP)
+    my_futures: list[Future[int]] = [Future(), Future()]
+    results: list[int] = []
+    errors: list[BaseException] = []
+
+    def _add_to_result(f: Future[int]) -> None:
+        if exc := f.exception():
+            errors.append(exc)
+        else:
             results.append(f.result())
 
-        state = UnifiedIterator(iter(my_futures)).run_as_completed(_add_to_result)
-        self.assertFalse(state.done())
-        my_futures[1].set_result(2)
-        self.assertFalse(state.done())
-        my_futures[0].set_result(1)
-        self.assertTrue(state.done())
-        self.assertIs(state.result(), None)
-        self.assertEqual(results, [1, 2])
+    iterator = iter(my_futures)
+    state = UnifiedIterator(iterator).run_as_completed(_add_to_result)
+    assert not state.done()
+    my_futures[0].set_exception(RuntimeError())
+    assert not state.done()
+    my_futures[1].set_result(2)
+    assert state.done()
+    assert state.result() is None
 
-    def test_run_as_completed_forwards_errors(self):
-        set_loop(NO_LOOP)
-        my_futures = [Future(), Future()]
-        results = []
-        errors = []
-
-        def _add_to_result(f):
-            if exc := f.exception():
-                errors.append(exc)
-            else:
-                results.append(f.result())
-
-        iterator = iter(my_futures)
-        state = UnifiedIterator(iterator).run_as_completed(_add_to_result)
-        self.assertFalse(state.done())
-        my_futures[0].set_exception(RuntimeError())
-        self.assertFalse(state.done())
-        my_futures[1].set_result(2)
-        self.assertTrue(state.done())
-        self.assertIs(state.result(), None)
-
-        self.assertEqual(results, [2])
-        self.assertEqual(len(errors), 1)
-
-    def test_run_as_completed_cancels(self):
-        set_loop(NO_LOOP)
-        my_futures = [Future(), Future()]
-        results = []
-
-        def _add_to_result(f):
-            results.append(f.result())
-            return False
-
-        iterator = iter(my_futures)
-        state = UnifiedIterator(iterator).run_as_completed(_add_to_result)
-        self.assertFalse(state.done())
-        my_futures[0].set_result(1)
-        self.assertTrue(state.done())
-        self.assertIs(state.result(), None)
-        self.assertEqual(results, [1])
-
-    def test_run_as_completed_cancels_on_crash(self):
-        set_loop(NO_LOOP)
-        my_futures = [Future(), Future()]
-        err = RuntimeError("test")
-
-        def _crash(_):
-            raise err
-
-        iterator = iter(my_futures)
-        state = UnifiedIterator(iterator).run_as_completed(_crash)
-        self.assertFalse(state.done())
-        my_futures[0].set_result(1)
-        self.assertTrue(state.done())
-        self.assertIs(state.exception(), err)
-        self.assertIsNotNone(next(iterator))
-
-    def test_run_as_completed_requests_as_needed(self):
-        my_futures = [Future(), Future()]
-        requested = []
-        continued = []
-
-        def _add_to_result(f):
-            pass
-
-        def _it():
-            for fut in my_futures:
-                requested.append(fut)
-                yield fut
-                continued.append(fut)
-
-        state = UnifiedIterator(_it()).run_as_completed(_add_to_result)
-        self.assertFalse(state.done())
-        self.assertEqual(requested, [my_futures[0]])
-        self.assertEqual(continued, [])
-
-        my_futures[0].set_result(1)
-        self.assertFalse(state.done())
-        self.assertEqual(requested, [my_futures[0], my_futures[1]])
-        self.assertEqual(continued, [my_futures[0]])
-
-        my_futures[1].set_result(1)
-        self.assertTrue(state.done())
-        self.assertEqual(requested, [my_futures[0], my_futures[1]])
-        self.assertEqual(continued, [my_futures[0], my_futures[1]])
-
-    def test_run_as_completed_cancels_on_iterator_crash(self):
-        err = RuntimeError("test")
-
-        def _it():
-            if False:
-                yield Future()
-            raise err
-
-        def _noop(_):
-            pass
-
-        state = UnifiedIterator(_it()).run_as_completed(_noop)
-        self.assertTrue(state.done())
-        self.assertIs(state.exception(), err)
-
-    def test_can_iter_futures(self):
-        n = 0
-        for fut in UnifiedIterator.from_call(future_iterator).futures:
-            self.assertEqual(n, fut.result())
-            n += 1
-            if n > 100:
-                break
-
-    def test_can_iter(self):
-        n = 0
-        for n2 in UnifiedIterator.from_call(future_iterator):
-            self.assertEqual(n, n2)
-            n += 1
-            if n > 100:
-                break
-
-    @wrap_test_for_asyncio
-    async def test_can_aiter(self):
-        n = 0
-        async for n2 in UnifiedIterator.from_call(future_iterator):
-            self.assertEqual(n, n2)
-            n += 1
-            if n > 100:
-                break
+    assert results == [2]
+    assert len(errors) == 1
 
 
-class UnifiedFunctionTest(unittest.TestCase):
-    def test_unified_auto_future_return_a_unified_future(self):
-        @unified()
-        def test_func():
-            return resolve(9999)
+def test_unified_iterator_run_as_completed_cancels() -> None:
+    set_loop(NO_LOOP)
+    my_futures: list[Future[int]] = [Future(), Future()]
+    results: list[int] = []
 
-        f = test_func()
-        self.assertIsInstance(f, UnifiedFuture)
-        self.assertEqual(f.result(), 9999)
+    def _add_to_result(f: Future[int]) -> bool:
+        results.append(f.result())
+        return False
 
-    def test_unified_auto_generator_return_a_unified_iterable(self):
-        @unified()
-        def test_func():
-            yield resolve(1)
-            yield resolve(2)
+    iterator = iter(my_futures)
+    state = UnifiedIterator(iterator).run_as_completed(_add_to_result)
+    assert not state.done()
+    my_futures[0].set_result(1)
+    assert state.done()
+    assert state.result() is None
+    assert results == [1]
 
-        f = test_func()
-        self.assertIsInstance(f, UnifiedIterator)
-        self.assertEqual(next(f), 1)
-        self.assertEqual(next(f), 2)
 
-    def test_unified_generator_accepts_other_iterables(self):
-        @unified(kind="generator")
-        def test_func():
-            return iter((resolve(1), resolve(2)))
+def test_unified_iterator_run_as_completed_cancels_on_crash() -> None:
+    set_loop(NO_LOOP)
+    my_futures: list[Future[int]] = [Future(), Future()]
+    err = RuntimeError("test")
 
-        f = test_func()
-        self.assertIsInstance(f, UnifiedIterator)
-        self.assertEqual(next(f), 1)
-        self.assertEqual(next(f), 2)
+    def _crash(_: Future[int]) -> None:
+        raise err
 
-    def test_unified_custom_future(self):
-        @unified(future_class=WrappedUnifiedFuture)
-        def test_func():
-            return resolve(9999)
+    iterator = iter(my_futures)
+    state = UnifiedIterator(iterator).run_as_completed(_crash)
+    assert not state.done()
+    my_futures[0].set_result(1)
+    assert state.done()
+    assert state.exception() is err
+    assert next(iterator) is not None
 
-        f = test_func()
-        self.assertIsInstance(f, WrappedUnifiedFuture)
 
-    def test_unified_custom_generator(self):
-        @unified(iterable_class=WrappedUnifiedIterable)
-        def test_func():
-            yield resolve(9999)
+def test_unified_iterator_run_as_completed_requests_as_needed() -> None:
+    my_futures: list[Future[int]] = [Future(), Future()]
+    requested: list[Future[int]] = []
+    continued: list[Future[int]] = []
 
-        f = test_func()
-        self.assertIsInstance(f, WrappedUnifiedIterable)
+    def _add_to_result(f: Future[int]) -> None:
+        pass
+
+    def _it() -> Iterator[Future[int]]:
+        for fut in my_futures:
+            requested.append(fut)
+            yield fut
+            continued.append(fut)
+
+    state = UnifiedIterator(_it()).run_as_completed(_add_to_result)
+    assert not state.done()
+    assert requested == [my_futures[0]]
+    assert continued == []
+
+    my_futures[0].set_result(1)
+    assert not state.done()
+    assert requested == [my_futures[0], my_futures[1]]
+    assert continued == [my_futures[0]]
+
+    my_futures[1].set_result(1)
+    assert state.done()
+    assert requested == [my_futures[0], my_futures[1]]
+    assert continued == [my_futures[0], my_futures[1]]
+
+
+def test_unified_iterator_run_as_completed_cancels_on_iterator_crash() -> None:
+    err = RuntimeError("test")
+
+    def _it() -> Iterator[Future[int]]:
+        raise err
+
+    def _noop(_: Future[int]) -> None:
+        pass
+
+    state = UnifiedIterator(_it()).run_as_completed(_noop)
+    assert state.done()
+    assert state.exception() is err
+
+
+def test_unified_iterator_can_iter_futures() -> None:
+    n = 0
+    for fut in UnifiedIterator.from_call(future_iterator).futures:
+        assert n == fut.result()
+        n += 1
+        if n > 100:
+            break
+
+
+def test_unified_iterator_can_iter() -> None:
+    n = 0
+    for n2 in UnifiedIterator.from_call(future_iterator):
+        assert n == n2
+        n += 1
+        if n > 100:
+            break
+
+
+@pytest.mark.asyncio
+async def test_unified_iterator_can_aiter() -> None:
+    set_loop(AsyncIOLoop())
+    n = 0
+    async for n2 in UnifiedIterator.from_call(future_iterator):
+        assert n == n2
+        n += 1
+        if n > 100:
+            break
+
+
+# unified decorator tests
+
+
+def test_unified_auto_future_return_a_unified_future() -> None:
+    @unified()
+    def test_func() -> Future[int]:
+        return resolve(9999)
+
+    f = test_func()
+    assert isinstance(f, UnifiedFuture)
+    assert f.result() == 9999
+
+
+def test_unified_auto_generator_return_a_unified_iterable() -> None:
+    @unified()
+    def test_func() -> Iterator[Future[int]]:
+        yield resolve(1)
+        yield resolve(2)
+
+    f = test_func()
+    assert isinstance(f, UnifiedIterator)
+    assert next(f) == 1
+    assert next(f) == 2
+
+
+def test_unified_generator_accepts_other_iterables() -> None:
+    @unified(kind="generator")
+    def test_func() -> Iterator[Future[int]]:
+        return iter((resolve(1), resolve(2)))
+
+    f = test_func()
+    assert isinstance(f, UnifiedIterator)
+    assert next(f) == 1
+    assert next(f) == 2
+
+
+def test_unified_custom_future() -> None:
+    @unified(future_class=WrappedUnifiedFuture)
+    def test_func() -> Future[int]:
+        return resolve(9999)
+
+    f = test_func()
+    assert isinstance(f, WrappedUnifiedFuture)
+
+
+def test_unified_custom_generator() -> None:
+    @unified(iterable_class=WrappedUnifiedIterable)
+    def test_func() -> Iterator[Future[int]]:
+        yield resolve(9999)
+
+    f = test_func()
+    assert isinstance(f, WrappedUnifiedIterable)

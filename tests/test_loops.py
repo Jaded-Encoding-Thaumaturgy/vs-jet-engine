@@ -1,44 +1,49 @@
 # vs-engine
 # Copyright (C) 2022  cid-chan
+# Copyright (C) 2025  Jaded-Encoding-Thaumaturgy
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
+"""Tests for the event loop API."""
 
+import contextlib
 import queue
 import threading
-import unittest
 from concurrent.futures import CancelledError, Future
+from typing import Any, NoReturn
 
+import pytest
 import vapoursynth
 
-from tests._testutils import forcefully_unregister_policy
 from vsengine.loops import Cancelled, EventLoop, _NoEventLoop, from_thread, get_loop, set_loop, to_thread
 from vsengine.policy import Policy, ThreadLocalStore
 
 
 class FailingEventLoop:
-    def attach(self):
+    """Event loop that fails on attach."""
+
+    def attach(self) -> NoReturn:
         raise RuntimeError()
 
 
 class SomeOtherLoop:
-    def attach(self):
-        pass
+    """A simple event loop for testing."""
 
-    def detach(self):
-        pass
+    def attach(self) -> None: ...
+
+    def detach(self) -> None: ...
 
 
 class SpinLoop(EventLoop):
+    """A spin-based event loop for testing."""
+
     def __init__(self) -> None:
-        self.queue = queue.Queue()
+        self.queue = queue.Queue[tuple[Future[Any], Any, tuple[Any, ...], dict[str, Any]] | None]()
 
-    def attach(self) -> None:
-        pass
+    def attach(self) -> None: ...
 
-    def detach(self) -> None:
-        pass
+    def detach(self) -> None: ...
 
-    def run(self):
+    def run(self) -> None:
         while (value := self.queue.get()) is not None:
             future, func, args, kwargs = value
             try:
@@ -48,91 +53,93 @@ class SpinLoop(EventLoop):
             else:
                 future.set_result(result)
 
-    def stop(self):
+    def stop(self) -> None:
         self.queue.put(None)
 
-    def from_thread(self, func, *args, **kwargs):
-        fut = Future()
+    def from_thread(self, func: Any, *args: Any, **kwargs: Any) -> Future[Any]:
+        fut = Future[Any]()
         self.queue.put((fut, func, args, kwargs))
         return fut
 
 
-class NoLoopTest(unittest.TestCase):
-    def test_wrap_cancelled_converts_the_exception(self) -> None:
-        loop = _NoEventLoop()
-        with self.assertRaises(CancelledError), loop.wrap_cancelled():
-            raise Cancelled
+# NoLoop tests
 
 
-class LoopApiTest(unittest.TestCase):
-    def tearDown(self) -> None:
-        forcefully_unregister_policy()
+def test_no_loop_wrap_cancelled_converts_the_exception() -> None:
+    loop = _NoEventLoop()
+    with pytest.raises(CancelledError), loop.wrap_cancelled():
+        raise Cancelled
 
-    def test_loop_can_override(self):
-        loop = _NoEventLoop()
-        set_loop(loop)
-        self.assertIs(get_loop(), loop)
 
-    def test_loop_reverts_to_no_on_error(self):
-        try:
-            set_loop(SomeOtherLoop())
-            loop = FailingEventLoop()
-            try:
-                set_loop(loop)
-            except RuntimeError:
-                pass
+# Loop API tests
 
-            self.assertIsInstance(get_loop(), _NoEventLoop)
-        finally:
-            set_loop(_NoEventLoop())
 
-    def test_loop_from_thread_retains_environment(self):
-        loop = SpinLoop()
-        set_loop(loop)
-        thr = threading.Thread(target=loop.run)
-        thr.start()
+def test_loop_can_override() -> None:
+    loop = _NoEventLoop()
+    set_loop(loop)
+    assert get_loop() is loop
 
-        def test():
-            return vapoursynth.get_current_environment()
 
-        try:
-            with Policy(ThreadLocalStore()) as p, p.new_environment() as env1:
-                with env1.use():
-                    fut = from_thread(test)
-                self.assertEqual(fut.result(timeout=0.1), env1.vs_environment)
-        finally:
-            loop.stop()
-            thr.join()
-            set_loop(_NoEventLoop())
+def test_loop_reverts_to_no_on_error() -> None:
+    try:
+        set_loop(SomeOtherLoop())  # type: ignore[arg-type]
+        loop = FailingEventLoop()
+        with contextlib.suppress(RuntimeError):
+            set_loop(loop)  # type: ignore[arg-type]
 
-    def test_loop_from_thread_does_not_require_environment(self):
-        loop = SpinLoop()
-        set_loop(loop)
-        thr = threading.Thread(target=loop.run)
-        thr.start()
+        assert isinstance(get_loop(), _NoEventLoop)
+    finally:
+        set_loop(_NoEventLoop())
 
-        def test():
-            pass
 
-        try:
-            from_thread(test).result(timeout=0.1)
-        finally:
-            loop.stop()
-            thr.join()
-            set_loop(_NoEventLoop())
+def test_loop_from_thread_retains_environment() -> None:
+    loop = SpinLoop()
+    set_loop(loop)
+    thr = threading.Thread(target=loop.run)
+    thr.start()
 
-    def test_loop_to_thread_retains_environment(self):
-        def test():
-            return vapoursynth.get_current_environment()
+    def test() -> vapoursynth.Environment:
+        return vapoursynth.get_current_environment()
 
-        with Policy(ThreadLocalStore()) as p, p.new_environment() as env1:
-            with env1.use():
-                fut = to_thread(test)
-            self.assertEqual(fut.result(timeout=0.1), env1.vs_environment)
+    try:
+        with Policy(ThreadLocalStore()) as p, p.new_environment() as env1, env1.use():
+            fut = from_thread(test)
+            assert fut.result(timeout=0.1) == env1.vs_environment
+    finally:
+        loop.stop()
+        thr.join()
+        set_loop(_NoEventLoop())
 
-    def test_loop_to_thread_does_not_require_environment(self):
-        def test():
-            pass
 
+def test_loop_from_thread_does_not_require_environment() -> None:
+    loop = SpinLoop()
+    set_loop(loop)
+    thr = threading.Thread(target=loop.run)
+    thr.start()
+
+    def test() -> None:
+        pass
+
+    try:
+        from_thread(test).result(timeout=0.1)
+    finally:
+        loop.stop()
+        thr.join()
+        set_loop(_NoEventLoop())
+
+
+def test_loop_to_thread_retains_environment() -> None:
+    def test() -> vapoursynth.Environment:
+        return vapoursynth.get_current_environment()
+
+    with Policy(ThreadLocalStore()) as p, p.new_environment() as env1, env1.use():
         fut = to_thread(test)
-        fut.result(timeout=0.1)
+        assert fut.result(timeout=0.1) == env1.vs_environment
+
+
+def test_loop_to_thread_does_not_require_environment() -> None:
+    def test() -> None:
+        pass
+
+    fut = to_thread(test)
+    fut.result(timeout=0.1)

@@ -40,6 +40,7 @@ trio = ["trio"]
 dev = [
     "mypy>=1.19.0",
     "pytest>=9.0.1",
+    "pytest-asyncio>=0.24.0",
     "ruff>=0.14.7",
     "trio",
     "vsstubs ; python_version>='3.13'",
@@ -68,6 +69,8 @@ include = ["vsengine", "tests"]
 
 [tool.pytest.ini_options]
 pythonpath = "."
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.mypy]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"

@@ -1,116 +1,130 @@
 # vs-engine
 # Copyright (C) 2022  cid-chan
+# Copyright (C) 2025  Jaded-Encoding-Thaumaturgy
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
-import unittest
+"""Tests for the policy system."""
 
+import contextlib
+from collections.abc import Iterator
+
+import pytest
 import vapoursynth
 
-from tests._testutils import forcefully_unregister_policy
 from vsengine.policy import GlobalStore, Policy
 
 
-class PolicyTest(unittest.TestCase):
-    def setUp(self) -> None:
-        forcefully_unregister_policy()
-        self.policy = Policy(GlobalStore())
+@pytest.fixture
+def policy() -> Iterator[Policy]:
+    """Fixture that provides a fresh Policy instance."""
+    p = Policy(GlobalStore())
+    yield p
+    with contextlib.suppress(RuntimeError):
+        p.unregister()
 
-    def tearDown(self) -> None:
-        forcefully_unregister_policy()
 
-    def test_register(self):
-        self.policy.register()
+class TestPolicy:
+    """Tests for basic Policy functionality."""
+
+    def test_register(self, policy: Policy) -> None:
+        policy.register()
         try:
-            self.assertIsNotNone(self.policy.api)
+            assert policy.api is not None
         finally:
-            self.policy.unregister()
+            policy.unregister()
 
-    def test_unregister(self):
-        self.policy.register()
-        self.policy.unregister()
+    def test_unregister(self, policy: Policy) -> None:
+        policy.register()
+        policy.unregister()
 
-        with self.assertRaises(RuntimeError):
-            self.policy.api.create_environment()
+        with pytest.raises(RuntimeError):
+            policy.api.create_environment()
 
-    def test_context_manager(self):
-        with self.policy:
-            self.policy.api.create_environment()
+    def test_context_manager(self, policy: Policy) -> None:
+        with policy:
+            policy.api.create_environment()
 
-        with self.assertRaises(RuntimeError):
-            self.policy.api.create_environment()
+        with pytest.raises(RuntimeError):
+            policy.api.create_environment()
 
-    def test_context_manager_on_error(self):
+    def test_context_manager_on_error(self, policy: Policy) -> None:
         try:
-            with self.policy:
+            with policy:
                 raise RuntimeError()
         except RuntimeError:
             pass
 
-        self.assertRaises(RuntimeError, lambda: self.policy.api.create_environment())
-
-        try:
-            self.policy.unregister()
-        except:
-            pass
+        with pytest.raises(RuntimeError):
+            policy.api.create_environment()
 
 
-class ManagedEnvironmentTest(unittest.TestCase):
-    def setUp(self) -> None:
-        forcefully_unregister_policy()
-        self.store = GlobalStore()
-        self.policy = Policy(self.store)
-        self.policy.register()
+class TestManagedEnvironment:
+    """Tests for ManagedEnvironment functionality."""
 
-    def tearDown(self) -> None:
-        self.policy.unregister()
+    @pytest.fixture
+    def store(self) -> GlobalStore:
+        return GlobalStore()
 
-    def test_new_environment_warns_on_del(self):
-        env = self.policy.new_environment()
-        with self.assertWarns(ResourceWarning):
+    @pytest.fixture
+    def registered_policy(self, store: GlobalStore) -> Iterator[Policy]:
+        """Fixture that provides a registered Policy."""
+        p = Policy(store)
+        p.register()
+        yield p
+        with contextlib.suppress(RuntimeError):
+            p.unregister()
+
+    def test_new_environment_warns_on_del(self, registered_policy: Policy) -> None:
+        env = registered_policy.new_environment()
+        with pytest.warns(ResourceWarning):
             del env
 
-    def test_new_environment_can_dispose(self):
-        env = self.policy.new_environment()
+    def test_new_environment_can_dispose(self, registered_policy: Policy) -> None:
+        env = registered_policy.new_environment()
         env.dispose()
-        self.assertRaises(RuntimeError, lambda: env.use().__enter__())
+        with pytest.raises(RuntimeError), env.use():
+            pass
 
-    def test_new_environment_can_use_context(self):
-        with self.policy.new_environment() as env:
-            self.assertRaises(vapoursynth.Error, lambda: vapoursynth.core.std.BlankClip().set_output(0))
+    def test_new_environment_can_use_context(self, registered_policy: Policy) -> None:
+        with registered_policy.new_environment() as env:
+            with pytest.raises(vapoursynth.Error):
+                vapoursynth.core.std.BlankClip().set_output(0)
 
             with env.use():
                 vapoursynth.core.std.BlankClip().set_output(0)
 
-            self.assertRaises(vapoursynth.Error, lambda: vapoursynth.core.std.BlankClip().set_output(0))
+            with pytest.raises(vapoursynth.Error):
+                vapoursynth.core.std.BlankClip().set_output(0)
 
-    def test_environment_can_switch(self):
-        env = self.policy.new_environment()
-        self.assertRaises(vapoursynth.Error, lambda: vapoursynth.core.std.BlankClip().set_output(0))
+    def test_environment_can_switch(self, registered_policy: Policy) -> None:
+        env = registered_policy.new_environment()
+        with pytest.raises(vapoursynth.Error):
+            vapoursynth.core.std.BlankClip().set_output(0)
         env.switch()
         vapoursynth.core.std.BlankClip().set_output(0)
         env.dispose()
 
-    def test_environment_can_capture_outputs(self):
-        with self.policy.new_environment() as env1, self.policy.new_environment() as env2:
+    def test_environment_can_capture_outputs(self, registered_policy: Policy) -> None:
+        with registered_policy.new_environment() as env1, registered_policy.new_environment() as env2:
             with env1.use():
                 vapoursynth.core.std.BlankClip().set_output(0)
 
-            self.assertEqual(len(env1.outputs), 1)
-            self.assertEqual(len(env2.outputs), 0)
+            assert len(env1.outputs) == 1
+            assert len(env2.outputs) == 0
 
-    def test_environment_can_capture_cores(self):
-        with self.policy.new_environment() as env1, self.policy.new_environment() as env2:
-            self.assertNotEqual(env1.core, env2.core)
+    def test_environment_can_capture_cores(self, registered_policy: Policy) -> None:
+        with registered_policy.new_environment() as env1, registered_policy.new_environment() as env2:
+            assert env1.core != env2.core
 
-    def test_inline_section_is_invisible(self):
-        with self.policy.new_environment() as env1, self.policy.new_environment() as env2:
+    def test_inline_section_is_invisible(self, store: GlobalStore, registered_policy: Policy) -> None:
+        with registered_policy.new_environment() as env1, registered_policy.new_environment() as env2:
             env1.switch()
 
-            env_before = self.store.get_current_environment()
+            env_before = store.get_current_environment()
 
             with env2.inline_section():
-                self.assertNotEqual(vapoursynth.get_current_environment(), env1.vs_environment)
-                self.assertEqual(env_before, self.store.get_current_environment())
+                assert vapoursynth.get_current_environment() != env1.vs_environment
+                assert env_before == store.get_current_environment()
 
-            self.assertEqual(vapoursynth.get_current_environment(), env1.vs_environment)
-            self.assertEqual(env_before, self.store.get_current_environment())
+            assert vapoursynth.get_current_environment() == env1.vs_environment
+            assert env_before == store.get_current_environment()
