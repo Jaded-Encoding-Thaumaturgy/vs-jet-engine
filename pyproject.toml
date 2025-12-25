@@ -1,17 +1,40 @@
-[project]
-name = "vsengine"
-version = "0.2.0+jet"
-license = { file = "COPYING" }
-readme = "README.md"
-authors = [{ name = "cid-chan", email = "cid+git@cid-chan.moe" }]
-dynamic = ["description"]
-requires-python = ">=3.12"
+[build-system]
+requires = ["hatchling>=1.27.0", "versioningit"]
+build-backend = "hatchling.build"
 
+[project]
+name = "vsengine-jet"
+description = "An engine for vapoursynth previewers, renderers and script analyis tools."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "COPYING" }
+authors = [{ name = "cid-chan", email = "cid+git@cid-chan.moe" }]
+maintainers = [
+    { name = "Vardë", email = "ichunjo.le.terrible@gmail.com" },
+    { name = "Jaded Encoding Thaumaturgy", email = "jaded.encoding.thaumaturgy@gmail.com" },
+]
+classifiers = [
+    "Topic :: Multimedia :: Graphics",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
 dependencies = ["vapoursynth>=69"]
+dynamic = ["version"]
+
+[project.urls]
+"Source Code" = "https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine"
+"Contact" = "https://discord.gg/XTpc6Fa9eB"
 
 [project.optional-dependencies]
 trio = ["trio"]
-test = ["pytest"]
 
 [dependency-groups]
 dev = [
@@ -21,9 +44,30 @@ dev = [
     "trio",
     "vsstubs ; python_version>='3.13'",
 ]
-[build-system]
-requires = ["flit_core >=3.2,<4"]
-build-backend = "flit_core.buildapi"
+
+[tool.hatch.version]
+source = "versioningit"
+default-version = "0.0.0+unknown"
+next-version = "minor"
+write = { file = "vsengine/_version.py", template = "__version__ = \"{normalized_version}\"\n__version_tuple__ = {version_tuple}" }
+
+[tool.hatch.version.format]
+distance = "{next_version}.dev{distance}+{vcs}{rev}"
+dirty = "{next_version}+dirty"
+distance-dirty = "{next_version}.dev{distance}+{vcs}{rev}.dirty"
+
+[tool.hatch.build]
+artifacts = ["vsengine/_version.py"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["vsengine"]
+exclude = ["tests"]
+
+[tool.hatch.build.targets.sdist]
+include = ["vsengine", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = "."
 
 [tool.mypy]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"
@@ -50,13 +94,25 @@ error_summary = true
 
 [tool.ruff]
 line-length = 120
-# extend-exclude = ["stubs/vapoursynth/__init__.pyi"]
 
 [tool.ruff.format]
 docstring-code-format = true
 
 [tool.ruff.lint]
-extend-select = ["E", "C4", "I", "PYI", "Q", "SIM", "N", "W", "RUF"]
+extend-select = [
+    "E",
+    "C4",
+    "I",
+    "PYI",
+    "Q",
+    "SIM",
+    "N",
+    "W",
+    "UP",
+    "FURB",
+    "RUF",
+]
+
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.*" = ["F401", "F403"]

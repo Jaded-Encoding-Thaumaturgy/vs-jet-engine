@@ -167,3 +167,6 @@ result-*
 
 # vsjet folder
 .vsjet
+
+# versioningit
+vsengine/_version.py
