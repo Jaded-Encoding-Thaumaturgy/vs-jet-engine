@@ -298,19 +298,15 @@ def test_unified_iterator_run_as_completed_cancels_on_iterator_crash() -> None:
 
 
 def test_unified_iterator_can_iter_futures() -> None:
-    n = 0
-    for fut in UnifiedIterator.from_call(future_iterator).futures:
+    for n, fut in enumerate(UnifiedIterator.from_call(future_iterator).futures):
         assert n == fut.result()
-        n += 1
         if n > 100:
             break
 
 
 def test_unified_iterator_can_iter() -> None:
-    n = 0
-    for n2 in UnifiedIterator.from_call(future_iterator):
+    for n, n2 in enumerate(UnifiedIterator.from_call(future_iterator)):
         assert n == n2
-        n += 1
         if n > 100:
             break
 
