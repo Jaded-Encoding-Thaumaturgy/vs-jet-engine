@@ -8,14 +8,15 @@
 from __future__ import annotations
 
 import ast
+import io
 import os
-import textwrap
-import traceback
+import sys
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
 from contextlib import AbstractContextManager
 from types import CodeType, ModuleType, TracebackType
 from typing import Any, Concatenate, Self, overload
+from uuid import uuid4
 
 import vapoursynth as vs
 
@@ -43,6 +44,8 @@ class ExecutionError(Exception):
 
         :param parent_error: The original exception that occurred.
         """
+        import textwrap
+
         msg = textwrap.indent(self.extract_traceback(parent_error), "| ")
         super().__init__(f"An exception was raised while running the script.\n{msg}")
         self.parent_error = parent_error
@@ -55,6 +58,8 @@ class ExecutionError(Exception):
         :param error: The exception to extract the traceback from.
         :return: A formatted string containing the traceback.
         """
+        import traceback
+
         msg = traceback.format_exception(type(error), error, error.__traceback__)
         msg = "".join(msg)
         return msg
@@ -70,6 +75,36 @@ class WrapAllErrors(AbstractContextManager[None]):
     def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
         if val is not None:
             raise ExecutionError(val) from None
+
+
+class _TempModule(AbstractContextManager[None]):
+    """
+    Temporarily register a module in sys.modules.
+
+    Ported from runpy.
+    That ensures the module is available in sys.modules during execution and restored/cleaned up afterwards.
+    """
+
+    def __init__(self, mod_name: str, filename: str) -> None:
+        self.mod_name = mod_name
+        self.module = ModuleType(mod_name)
+        self.module.__dict__["__file__"] = filename
+        self._saved_module = list[ModuleType | None]()
+
+    def __enter__(self) -> None:
+        mod_name = self.mod_name
+
+        self._saved_module.append(sys.modules.get(mod_name))
+
+        sys.modules[mod_name] = self.module
+
+    def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
+        mod = self._saved_module.pop()
+
+        if mod:
+            sys.modules[self.mod_name] = mod
+        else:
+            del sys.modules[self.mod_name]
 
 
 def inline_runner[T](func: Callable[[], T]) -> Future[T]:
@@ -267,7 +302,11 @@ def load_script(
     """
 
     def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
-        with ctx, open(script) as f:
+        nonlocal script
+
+        script = str(script)
+
+        with ctx, io.open_code(script) as f, _TempModule(module.__name__, script):
             exec(
                 compile(f.read(), filename=script, dont_inherit=True, flags=0, mode="exec"),
                 module.__dict__,
@@ -350,12 +389,14 @@ def load_code(
     def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
         nonlocal script, kwargs
 
-        with ctx:
+        filename = kwargs.pop("filename", f"<runvpy {uuid4().hex[:8]}>")
+
+        with ctx, _TempModule(module.__name__, filename):
             if isinstance(script, CodeType):
                 code = script
             else:
                 compile_args: dict[str, Any] = {
-                    "filename": "<runvpy>",
+                    "filename": filename,
                     "dont_inherit": True,
                     "flags": 0,
                     "mode": "exec",
