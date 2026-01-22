@@ -1,0 +1,53 @@
+name: Publish
+on:
+  release:
+    types: published
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: 3.14
+
+jobs:
+  package_build:
+    name: Build and push to PyPI
+    runs-on: ubuntu-latest
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/vsjetengine
+
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Build
+        run: uvx hatch build
+
+      - name: Check the output
+        run: uvx twine check --strict dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Upload dist/ files to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+
+      - name: Post webhook for failure
+        if: failure()
+        uses: Jaded-Encoding-Thaumaturgy/discord-failure-notifier@v1
+        with:
+          webhook-url: ${{ secrets.WEBHOOK_URL }}
