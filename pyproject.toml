@@ -30,7 +30,7 @@ dependencies = ["vapoursynth>=69"]
 dynamic = ["version"]
 
 [project.urls]
-"Source Code" = "https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine"
+"Source Code" = "https://github.com/Jaded-Encoding-Thaumaturgy/vs-jet-engine"
 "Contact" = "https://discord.gg/XTpc6Fa9eB"
 
 [project.optional-dependencies]
