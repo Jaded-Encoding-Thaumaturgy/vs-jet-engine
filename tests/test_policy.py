@@ -42,7 +42,8 @@ class TestPolicy:
 
     def test_context_manager(self, policy: Policy) -> None:
         with policy:
-            policy.api.create_environment()
+            env = policy.api.create_environment()
+            policy.api.destroy_environment(env)
 
         with pytest.raises(RuntimeError):
             policy.api.create_environment()

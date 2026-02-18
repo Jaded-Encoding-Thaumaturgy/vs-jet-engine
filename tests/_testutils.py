@@ -123,6 +123,7 @@ class StandalonePolicy(EnvironmentPolicy):
 
     def on_policy_cleared(self) -> None:
         admit_environment(self._current, self._core)
+        self._api.destroy_environment(self._current)
 
         del self._current
         del self._core
