@@ -7,10 +7,13 @@
 
 import ast
 import contextlib
+import gc
+import logging
 import os
 import textwrap
 import threading
 import types
+import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -20,7 +23,7 @@ import vapoursynth
 from tests._testutils import BLACKBOARD
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.loops import set_loop
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import GlobalStore, ManagedEnvironment, Policy
 from vsengine.vpy import (
     ExecutionError,
     Script,
@@ -41,7 +44,7 @@ def noop() -> Iterator[None]:
     yield
 
 
-class TestError(Exception):
+class VpyTestError(Exception):
     pass
 
 
@@ -73,7 +76,7 @@ def test_run_executes_successfully() -> None:
 def test_run_wraps_exception() -> None:
     @callback_script
     def test_code(_: types.ModuleType) -> None:
-        raise TestError()
+        raise VpyTestError()
 
     with Policy(GlobalStore()) as p, p.new_environment() as env:
         s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
@@ -81,7 +84,7 @@ def test_run_wraps_exception() -> None:
 
         exc = fut.exception()
         assert isinstance(exc, ExecutionError)
-        assert isinstance(exc.parent_error, TestError)
+        assert isinstance(exc.parent_error, VpyTestError)
 
 
 def test_execute_resolves_immediately() -> None:
@@ -112,14 +115,14 @@ def test_execute_resolves_to_script() -> None:
 def test_execute_resolves_immediately_when_raising() -> None:
     @callback_script
     def test_code(_: types.ModuleType) -> None:
-        raise TestError
+        raise VpyTestError
 
     with Policy(GlobalStore()) as p, p.new_environment() as env:
         s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
         try:
             s.result()
         except ExecutionError as err:
-            assert isinstance(err.parent_error, TestError)
+            assert isinstance(err.parent_error, VpyTestError)
         except Exception as e:
             pytest.fail(f"Wrong exception: {e!r}")
         else:
@@ -391,3 +394,95 @@ def test_wrap_exceptions_wraps_exception() -> None:
         assert e.parent_error is err
     else:
         pytest.fail("Wrap all errors swallowed the exception")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_dispose_clears_future(fail: bool) -> None:
+    code = "raise RuntimeError()" if fail else "pass"
+    with Policy(GlobalStore()) as p:
+        s = load_code(code, p)
+        with contextlib.suppress(ExecutionError):
+            s.result()
+
+        assert hasattr(s, "_future")
+        s.dispose()
+        assert not hasattr(s, "_future")
+
+
+def test_dispose_prevents_hospice_warning_on_error(caplog: pytest.LogCaptureFixture) -> None:
+    @callback_script
+    def test_code(mod: types.ModuleType) -> None:
+        import vapoursynth
+
+        setattr(mod, "leak", vapoursynth.core.std.BlankClip())
+        raise VpyTestError()
+
+    with Policy(GlobalStore()) as p:
+        s = Script(test_code, types.ModuleType("__test__"), p.new_environment(), inline_runner)
+        with pytest.raises(ExecutionError):
+            s.result()
+
+        s.dispose()
+
+        with caplog.at_level(logging.WARNING, logger="vsengine._hospice"):
+            for _ in range(5):
+                gc.collect()
+
+        assert not any("Core is still in use" in r.message for r in caplog.records if "vsengine._hospice" in r.name)
+
+
+def test_hospice_warns_if_future_not_deleted(caplog: pytest.LogCaptureFixture) -> None:
+    @callback_script
+    def test_code(mod: types.ModuleType) -> None:
+        import vapoursynth
+
+        setattr(mod, "clip", vapoursynth.core.std.BlankClip())
+        raise VpyTestError()
+
+    with Policy(GlobalStore()) as p:
+        env = p.new_environment()
+        s = Script(test_code, types.ModuleType("__test__"), env, inline_runner)
+        fut = s.run()
+        with pytest.raises(ExecutionError):
+            fut.result()
+
+        # Monkeypatch dispose to NOT delete the future and NOT clear module dict
+        original_dispose = s.dispose
+
+        def leaky_dispose() -> None:
+            # We ONLY dispose the environment, skipping del self._future and module.clear()
+            if isinstance(s.environment, ManagedEnvironment):
+                s.environment.dispose()
+
+        setattr(s, "dispose", leaky_dispose)
+
+        try:
+            # Clear local ref to future. It should still be held by s._future
+            del fut
+
+            s.dispose()
+
+            # Trigger hospice collection
+            with caplog.at_level(logging.WARNING, logger="vsengine._hospice"):
+                for _ in range(10):
+                    gc.collect()
+
+            # There should be a warning from hospice now because s._future still exists
+            # and is holding onto the traceback, which holds onto the module, which holds the core (via mod.clip)
+            assert any("Core is still in use" in r.message for r in caplog.records)
+        finally:
+            setattr(s, "dispose", original_dispose)
+            s.module.__dict__.clear()
+            with contextlib.suppress(AttributeError):
+                del s._future
+
+
+def test_script_is_collectible_after_dispose() -> None:
+    with Policy(GlobalStore()) as p:
+        s = load_code("raise RuntimeError()", p)
+        s.run()
+        s_ref = weakref.ref(s)
+        s.dispose()
+        del s
+        gc.collect()
+        assert s_ref() is None
