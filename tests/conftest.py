@@ -12,6 +12,7 @@ from collections.abc import Iterator
 import pytest
 
 from tests._testutils import forcefully_unregister_policy
+from vsengine import _hospice
 from vsengine.loops import NO_LOOP, set_loop
 
 
@@ -29,3 +30,21 @@ def clean_policy() -> Iterator[None]:
     yield
     forcefully_unregister_policy()
     set_loop(NO_LOOP)
+
+
+@pytest.fixture(autouse=True)
+def reset_hospice_state() -> Iterator[None]:
+    """Reset hospice module state before each test to ensure isolation."""
+    _hospice.stage1.clear()
+    _hospice.stage2.clear()
+    _hospice.stage2_to_add.clear()
+    _hospice.hold.clear()
+    _hospice.cores.clear()
+    _hospice.refnanny.clear()
+    yield
+    _hospice.stage1.clear()
+    _hospice.stage2.clear()
+    _hospice.stage2_to_add.clear()
+    _hospice.hold.clear()
+    _hospice.cores.clear()
+    _hospice.refnanny.clear()

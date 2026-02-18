@@ -14,31 +14,15 @@ from typing import Any
 
 import pytest
 
-from vsengine import _hospice
 from vsengine._hospice import admit_environment, any_alive, freeze, unfreeze
 
 
 @pytest.fixture(autouse=True)
-def reset_hospice_state() -> Iterator[None]:
-    """Reset hospice module state before each test to ensure isolation."""
-    # Clear the mock timings registry
+def reset_mock_registry() -> Iterator[None]:
+    """Reset the mock timings registry before each test."""
     _mock_timings_registry.clear()
-    # Clear all hospice state before test
-    _hospice.stage1.clear()
-    _hospice.stage2.clear()
-    _hospice.stage2_to_add.clear()
-    _hospice.hold.clear()
-    _hospice.cores.clear()
-    _hospice.refnanny.clear()
     yield
-    # Clean up after test as well
     _mock_timings_registry.clear()
-    _hospice.stage1.clear()
-    _hospice.stage2.clear()
-    _hospice.stage2_to_add.clear()
-    _hospice.hold.clear()
-    _hospice.cores.clear()
-    _hospice.refnanny.clear()
 
 
 # Global registry to simulate CoreTimings holding references to cores
