@@ -478,11 +478,17 @@ def test_hospice_warns_if_future_not_deleted(caplog: pytest.LogCaptureFixture) -
 
 
 def test_script_is_collectible_after_dispose() -> None:
-    with Policy(GlobalStore()) as p:
-        s = load_code("raise RuntimeError()", p)
-        s.run()
-        s_ref = weakref.ref(s)
-        s.dispose()
-        del s
+    def _run_and_dispose() -> weakref.ReferenceType[Script[Any]]:
+        with Policy(GlobalStore()) as p:
+            s = load_code("raise RuntimeError()", p)
+            s.run()
+            s_ref = weakref.ref(s)
+            s.dispose()
+            return s_ref
+
+    s_ref = _run_and_dispose()
+
+    for _ in range(5):
         gc.collect()
-        assert s_ref() is None
+
+    assert s_ref() is None

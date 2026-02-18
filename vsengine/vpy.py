@@ -13,7 +13,7 @@ import os
 import sys
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
-from contextlib import AbstractContextManager, suppress
+from contextlib import AbstractContextManager
 from types import CodeType, ModuleType, TracebackType
 from typing import Any, Concatenate, Self, overload
 from uuid import uuid4
@@ -208,9 +208,7 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
 
     def dispose(self) -> None:
         """Disposes the managed environment and clears the module globals."""
-        with suppress(AttributeError):
-            del self._future
-
+        self._del_future_refs()
         self.module.__dict__.clear()
 
         if isinstance(self.environment, ManagedEnvironment):
@@ -238,6 +236,14 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
     def _run_inline(self) -> None:
         with self.environment.use():
             self.executor(WrapAllErrors(), self.module)
+
+    def _del_future_refs(self) -> None:
+        if (fut := getattr(self, "_future", None)) is not None:
+            if fut.done() and not fut.cancelled() and (exc := fut.exception()):
+                exc.__traceback__ = None
+                if isinstance(exc, ExecutionError) and (parent := exc.parent_error):
+                    parent.__traceback__ = None
+            del self._future
 
 
 @overload
