@@ -94,17 +94,17 @@ class ProxyPolicy(EnvironmentPolicy):
 
     def get_current_environment(self) -> EnvironmentData | None:
         if self._policy is None:
-            raise RuntimeError("This proxy is not attached to a policy.")
+            return None
         return self._policy.get_current_environment()
 
     def set_environment(self, environment: EnvironmentData | None) -> EnvironmentData | None:
         if self._policy is None:
-            raise RuntimeError("This proxy is not attached to a policy.")
+            return None
         return self._policy.set_environment(environment)
 
     def is_alive(self, environment: EnvironmentData) -> bool:
         if self._policy is None:
-            raise RuntimeError("This proxy is not attached to a policy.")
+            return False
         return self._policy.is_alive(environment)
 
 
