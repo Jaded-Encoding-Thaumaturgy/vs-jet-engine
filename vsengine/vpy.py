@@ -13,7 +13,7 @@ import os
 import sys
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from types import CodeType, ModuleType, TracebackType
 from typing import Any, Concatenate, Self, overload
 from uuid import uuid4
@@ -85,10 +85,9 @@ class _TempModule(AbstractContextManager[None]):
     That ensures the module is available in sys.modules during execution and restored/cleaned up afterwards.
     """
 
-    def __init__(self, mod_name: str, filename: str) -> None:
+    def __init__(self, mod_name: str, module: ModuleType | None = None) -> None:
         self.mod_name = mod_name
-        self.module = ModuleType(mod_name)
-        self.module.__dict__["__file__"] = filename
+        self.module = module or ModuleType(mod_name)
         self._saved_module = list[ModuleType | None]()
 
     def __enter__(self) -> None:
@@ -105,6 +104,56 @@ class _TempModule(AbstractContextManager[None]):
             sys.modules[self.mod_name] = mod
         else:
             del sys.modules[self.mod_name]
+
+
+class _ModifiedPath(AbstractContextManager[None]):
+    """
+    Temporarily add a path to sys.path.
+
+    Ported from runpy.
+    """
+
+    def __init__(self, path: str | os.PathLike[str]) -> None:
+        self.path = os.path.abspath(path)
+
+    def __enter__(self) -> None:
+        sys.path.insert(0, self.path)
+
+    def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
+        with suppress(ValueError):
+            sys.path.remove(self.path)
+
+
+class _ModifiedArgv0(AbstractContextManager[None]):
+    """
+    Temporarily modify sys.argv[0].
+
+    Ported from runpy.
+    """
+
+    def __init__(self, value: Any) -> None:
+        self.value = str(value)
+        self._saved_value = ""
+
+    def __enter__(self) -> None:
+        self._saved_value = sys.argv[0]
+        sys.argv[0] = self.value
+
+    def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
+        sys.argv[0] = self._saved_value
+
+
+def _set_module_dunders(module: ModuleType, filename: str) -> None:
+    for key, value in {
+        "__name__": module.__name__,
+        "__file__": filename,
+        "__cached__": None,
+        "__doc__": None,
+        "__loader__": None,
+        "__package__": None,
+        "__spec__": None,
+    }.items():
+        module.__dict__.setdefault(key, value)
 
 
 def inline_runner[T](func: Callable[[], T]) -> Future[T]:
@@ -309,18 +358,22 @@ def load_script(
                   This is unsafe when running multiple scripts at once.
     :returns: A script object. The script starts running when you call run() on it, or await it.
     """
+    rscript = os.path.abspath(os.path.normpath(str(script)))
 
     def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
-        nonlocal script
+        path = os.path.dirname(rscript)
 
-        script = str(script)
+        with (
+            ctx,
+            _TempModule(module.__name__, module),
+            _ModifiedPath(path),
+            _ModifiedArgv0(rscript),
+            io.open_code(rscript) as f,
+        ):
+            _set_module_dunders(module, rscript)
 
-        with ctx, io.open_code(script) as f, _TempModule(module.__name__, script):
-            exec(
-                compile(f.read(), filename=script, dont_inherit=True, flags=0, mode="exec"),
-                module.__dict__,
-                module.__dict__,
-            )
+            code = compile(f.read(), filename=rscript, dont_inherit=True, flags=0, mode="exec")
+            exec(code, module.__dict__, module.__dict__)
 
     return _load(_execute, environment, module, inline, chdir)
 
@@ -393,25 +446,28 @@ def load_code(
     :param chdir: Change the currently running directory while the script is running.
                   This is unsafe when running multiple scripts at once.
     :returns: A script object. The script starts running when you call run() on it, or await it.
+    :kwargs: Arguments to pass to compile().
     """
+    if "filename" in kwargs:
+        kwargs["filename"] = os.path.abspath(os.path.normpath(str(kwargs["filename"])))
 
     def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
-        nonlocal script, kwargs
-
         filename = kwargs.pop("filename", f"<runvpy {uuid4().hex[:8]}>")
+        path = os.path.dirname(filename) if os.path.exists(filename) else None
 
-        with ctx, _TempModule(module.__name__, filename):
-            if isinstance(script, CodeType):
-                code = script
-            else:
-                compile_args: dict[str, Any] = {
-                    "filename": filename,
-                    "dont_inherit": True,
-                    "flags": 0,
-                    "mode": "exec",
-                } | kwargs
-                code = compile(script, **compile_args)
+        with (
+            ctx,
+            _TempModule(module.__name__, module),
+            _ModifiedPath(path) if path else ctx,
+            _ModifiedArgv0(filename) if path else ctx,
+        ):
+            code = (
+                compile(script, **{"filename": filename, "dont_inherit": True, "flags": 0, "mode": "exec"} | kwargs)
+                if not isinstance(script, CodeType)
+                else script
+            )
 
+            _set_module_dunders(module, filename)
             exec(code, module.__dict__, module.__dict__)
 
     return _load(_execute, environment, module, inline, chdir)

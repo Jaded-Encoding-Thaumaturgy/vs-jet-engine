@@ -10,11 +10,13 @@ import contextlib
 import gc
 import logging
 import os
+import sys
 import textwrap
 import threading
 import types
 import weakref
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,6 +31,8 @@ from vsengine.vpy import (
     Script,
     WrapAllErrors,
     _load,
+    _ModifiedArgv0,
+    _ModifiedPath,
     chdir_runner,
     inline_runner,
     load_code,
@@ -492,3 +496,84 @@ def test_script_is_collectible_after_dispose() -> None:
         gc.collect()
 
     assert s_ref() is None
+
+
+def test_modified_path() -> None:
+    original_path = sys.path.copy()
+    test_path = os.path.abspath("test_path_dummy")
+    with _ModifiedPath(test_path):
+        assert sys.path[0] == test_path
+        assert test_path in sys.path
+    assert sys.path == original_path
+    assert test_path not in sys.path
+
+
+def test_modified_argv0() -> None:
+    original_argv0 = sys.argv[0]
+    test_argv0 = "test_script_argv0.py"
+    with _ModifiedArgv0(test_argv0):
+        assert sys.argv[0] == test_argv0
+    assert sys.argv[0] == original_argv0
+
+
+def test_load_script_dunder_attributes(tmp_path: Path) -> None:
+    script_path = tmp_path / "test_script.vpy"
+    script_path.write_text(
+        "from tests._testutils import BLACKBOARD; "
+        "BLACKBOARD['script_dunders'] = {k: v for k, v in globals().items() if k.startswith('__')}"
+    )
+
+    BLACKBOARD.clear()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_script(script_path).result()
+
+    dunders = BLACKBOARD["script_dunders"]
+    assert dunders["__file__"] == os.path.abspath(os.path.normpath(str(script_path)))
+    assert dunders["__name__"] == "__vapoursynth__"
+    assert "__cached__" in dunders
+    assert "__doc__" in dunders
+    assert "__loader__" in dunders
+    assert "__package__" in dunders
+    assert "__spec__" in dunders
+
+
+def test_load_code_dunder_attributes() -> None:
+    code = (
+        "from tests._testutils import BLACKBOARD; "
+        "BLACKBOARD['code_dunders'] = {k: v for k, v in globals().items() if k.startswith('__')}"
+    )
+
+    BLACKBOARD.clear()
+    filename = "test_code_attributes.py"
+    # Create the file so resolve works as expected if it exists check is used
+    Path(filename).touch()
+    try:
+        with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+            load_code(code, filename=filename).result()
+
+        dunders = BLACKBOARD["code_dunders"]
+        assert dunders["__file__"] == os.path.abspath(os.path.normpath(filename))
+        assert dunders["__name__"] == "__vapoursynth__"
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+
+
+def test_load_script_adds_to_path(tmp_path: Path) -> None:
+    # Create a submodule in a temp directory
+    sub_dir = tmp_path / "my_module"
+    sub_dir.mkdir()
+    (sub_dir / "__init__.py").write_text("VAL = 42")
+
+    script_path = tmp_path / "main_script.vpy"
+    script_path.write_text(
+        "from tests._testutils import BLACKBOARD; import my_module; BLACKBOARD['module_val'] = my_module.VAL"
+    )
+
+    BLACKBOARD.clear()
+
+    with Policy(GlobalStore()) as p, p.new_environment() as env, env.use():
+        load_script(script_path).result()
+
+    assert BLACKBOARD["module_val"] == 42
