@@ -11,7 +11,7 @@ from vsengine.policy import GlobalStore, Policy
 
 with Policy(GlobalStore()) as policy, policy.new_environment() as env, env.use():
     vs.core.std.BlankClip().set_output()
-print(env.outputs)  # {0: <vapoursynth.VideoOutputTuple ...>}
+    print(env.outputs)  # {0: <vapoursynth.VideoOutputTuple ...>}
 ```
 
 ## Policy
