@@ -13,6 +13,7 @@ Parts:
 - vpy:     Run .vpy-scripts in your application.
 """
 
+from vsengine.futures import *
 from vsengine.loops import *
 from vsengine.policy import *
 from vsengine.video import *

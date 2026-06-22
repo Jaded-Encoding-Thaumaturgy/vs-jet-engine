@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from vsengine._futures import UnifiedFuture, UnifiedIterator, unified
 from vsengine.adapters.asyncio import AsyncIOLoop
+from vsengine.futures import UnifiedFuture, UnifiedIterator, unified
 from vsengine.loops import NO_LOOP, set_loop
 
 

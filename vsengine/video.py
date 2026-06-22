@@ -12,9 +12,9 @@ from concurrent.futures import Future
 
 import vapoursynth as vs
 
-from ._futures import UnifiedFuture, unified
 from ._helpers import use_inline
 from ._nodes import buffer_futures, close_when_needed
+from .futures import UnifiedFuture, unified
 from .policy import ManagedEnvironment
 
 __all__ = ["frame", "frames", "planes", "render"]

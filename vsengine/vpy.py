@@ -20,7 +20,7 @@ from uuid import uuid4
 
 import vapoursynth as vs
 
-from ._futures import UnifiedFuture, unified
+from .futures import UnifiedFuture, unified
 from .loops import make_awaitable, to_thread
 from .policy import ManagedEnvironment, Policy
 
