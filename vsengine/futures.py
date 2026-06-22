@@ -27,6 +27,10 @@ class AsyncFutureLike[V](Protocol):
     async def awaitable(self) -> V: ...
 
 
+type UnifiedFutureLike[T] = UnifiedFuture[T]
+type UnifiedIteratorLike[T] = UnifiedIterator[T]
+
+
 class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncContextManager[Any], Awaitable[T]):
     """
     A Promise-inspired Future that unifies concurrent.futures.Future
@@ -34,7 +38,12 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
     """
 
     @classmethod
-    def from_call[**P](cls, func: Callable[P, Future[T]], *args: P.args, **kwargs: P.kwargs) -> Self:
+    def from_call[S, **P](
+        cls: type[UnifiedFutureLike[S]],
+        func: Callable[P, Future[S]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> UnifiedFutureLike[S]:
         """
         Call `func` and wrap the returned `Future` as a `UnifiedFuture`.
 
@@ -54,7 +63,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         return cls.from_future(future)
 
     @classmethod
-    def from_future(cls, future: Future[T]) -> Self:
+    def from_future[S](cls: type[UnifiedFutureLike[S]], future: Future[S]) -> UnifiedFutureLike[S]:
         """
         Wrap an existing `Future` as a `UnifiedFuture`.
 
@@ -68,7 +77,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
         result = cls()
 
-        def _receive(fn: Future[T]) -> None:
+        def _receive(fn: Future[S]) -> None:
             if (exc := future.exception()) is not None:
                 result.set_exception(exc)
             else:
@@ -78,7 +87,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         return result
 
     @classmethod
-    def resolve(cls, value: T) -> Self:
+    def resolve[S](cls: type[UnifiedFutureLike[S]], value: S) -> UnifiedFutureLike[S]:
         """
         Return an already-resolved `UnifiedFuture` carrying `value`.
 
@@ -90,7 +99,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         return future
 
     @classmethod
-    def reject(cls, error: BaseException) -> Self:
+    def reject(cls: type[UnifiedFutureLike[Any]], error: BaseException) -> UnifiedFutureLike[Any]:
         """
         Return an already-rejected `UnifiedFuture` carrying `error`.
 
@@ -316,11 +325,16 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         self.future_iterable = future_iterable
 
     @classmethod
-    def from_call[**P](cls, func: Callable[P, Iterator[Future[T]]], *args: P.args, **kwargs: P.kwargs) -> Self:
+    def from_call[S, **P](
+        cls: type[UnifiedIteratorLike[S]],
+        func: Callable[P, Iterator[Future[S]]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> UnifiedIteratorLike[S]:
         """
         Call `func` and wrap the returned iterator as a `UnifiedIterator`.
 
-        :param func: A callable that returns an `Iterator[Future[T]]`.
+        :param func: A callable that returns an `Iterator[Future[S]]`.
         :param args: Positional arguments forwarded to `func`.
         :param kwargs: Keyword arguments forwarded to `func`.
         :return: A `UnifiedIterator` wrapping the returned iterator.
