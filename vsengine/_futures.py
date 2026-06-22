@@ -75,15 +75,19 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
     # Manipulating futures
     @overload
-    def then[V](self, success_cb: Callable[[T], V], err_cb: None) -> UnifiedFuture[V]: ...
+    def then[S](self, success_cb: Callable[[T], S]) -> UnifiedFuture[S]: ...
+    @overload
+    def then[S](self, success_cb: Callable[[T], S], err_cb: None = ...) -> UnifiedFuture[S]: ...
     @overload
     def then[V](self, success_cb: None, err_cb: Callable[[BaseException], V]) -> UnifiedFuture[T | V]: ...
-    def then[V](
-        self, success_cb: Callable[[T], V] | None, err_cb: Callable[[BaseException], V] | None
-    ) -> UnifiedFuture[V] | UnifiedFuture[T | V]:
-        result = UnifiedFuture[T | V]()
+    @overload
+    def then[V](self, *, err_cb: Callable[[BaseException], V]) -> UnifiedFuture[T | V]: ...
+    @overload
+    def then[S, V](self, success_cb: Callable[[T], S], err_cb: Callable[[BaseException], V]) -> UnifiedFuture[S | V]: ...  # fmt: skip  # noqa: E501
+    def then[S, V](self, success_cb: Callable[[T], S] | None = None, err_cb: Callable[[BaseException], V] | None = None) -> Any:  # fmt: skip  # noqa: E501
+        result = UnifiedFuture[Any]()
 
-        def _run_cb(cb: Callable[[Any], V], v: Any) -> None:
+        def _run_cb(cb: Callable[[Any], Any], v: T | BaseException) -> None:
             try:
                 r = cb(v)
             except Exception as e:
