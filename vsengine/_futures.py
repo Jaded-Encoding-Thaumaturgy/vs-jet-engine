@@ -86,7 +86,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         def _run_cb(cb: Callable[[Any], V], v: Any) -> None:
             try:
                 r = cb(v)
-            except BaseException as e:
+            except Exception as e:
                 result.set_exception(e)
             else:
                 result.set_result(r)
@@ -247,7 +247,7 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
 
             try:
                 result = callback(fut)
-            except BaseException as e:
+            except Exception as e:
                 state.set_exception(e)
                 return False
             else:
