@@ -193,6 +193,96 @@ async def test_unified_future_add_loop_callback_chaining() -> None:
     assert recorded_value == 42
 
 
+@pytest.mark.asyncio
+async def test_unified_future_then_on_loop() -> None:
+    set_loop(AsyncIOLoop())
+
+    fut = Future[int]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    loop_thread: threading.Thread | None = None
+    callback_thread: threading.Thread | None = None
+
+    def _init_thread() -> None:
+        fut.set_result(42)
+
+    def _on_success(v: int) -> int:
+        nonlocal callback_thread
+        callback_thread = threading.current_thread()
+        return v * 2
+
+    chained = unified_fut.then(_on_success, on_loop=True)
+
+    thr = threading.Thread(target=_init_thread)
+    thr.start()
+
+    res = await chained
+    loop_thread = threading.current_thread()
+
+    assert callback_thread == loop_thread
+    assert res == 84
+
+
+@pytest.mark.asyncio
+async def test_unified_future_map_on_loop() -> None:
+    set_loop(AsyncIOLoop())
+
+    fut = Future[int]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    loop_thread: threading.Thread | None = None
+    callback_thread: threading.Thread | None = None
+
+    def _init_thread() -> None:
+        fut.set_result(10)
+
+    def _map_fn(v: int) -> str:
+        nonlocal callback_thread
+        callback_thread = threading.current_thread()
+        return f"value: {v}"
+
+    chained = unified_fut.map(_map_fn, on_loop=True)
+
+    thr = threading.Thread(target=_init_thread)
+    thr.start()
+
+    res = await chained
+    loop_thread = threading.current_thread()
+
+    assert callback_thread == loop_thread
+    assert res == "value: 10"
+
+
+@pytest.mark.asyncio
+async def test_unified_future_catch_on_loop() -> None:
+    set_loop(AsyncIOLoop())
+
+    fut = Future[int]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    loop_thread: threading.Thread | None = None
+    callback_thread: threading.Thread | None = None
+
+    def _init_thread() -> None:
+        fut.set_exception(ValueError("error!"))
+
+    def _catch_fn(e: BaseException) -> str:
+        nonlocal callback_thread
+        callback_thread = threading.current_thread()
+        return str(e)
+
+    chained = unified_fut.catch(_catch_fn, on_loop=True)
+
+    thr = threading.Thread(target=_init_thread)
+    thr.start()
+
+    res = await chained
+    loop_thread = threading.current_thread()
+
+    assert callback_thread == loop_thread
+    assert res == "error!"
+
+
 # UnifiedIterator tests
 
 
