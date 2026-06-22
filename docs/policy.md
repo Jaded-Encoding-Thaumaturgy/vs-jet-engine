@@ -7,9 +7,9 @@ The `vsengine.policy` module implements VapourSynth's Environment Policy system,
 ```python
 import vapoursynth as vs
 
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import Policy
 
-with Policy(GlobalStore()) as policy, policy.new_environment() as env, env.use():
+with Policy() as policy, policy.new_environment() as env, env.use():
     vs.core.std.BlankClip().set_output()
     print(env.outputs)  # {0: <vapoursynth.VideoOutputTuple ...>}
 ```
@@ -20,26 +20,37 @@ The `Policy` class registers an environment policy with VapourSynth and manages 
 
 ### Creating a Policy
 
+By default, instantiating `Policy` without any arguments uses a `GlobalStore`.
+
 ```python
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import Policy
 
 # Manual registration
-policy = Policy(GlobalStore())
+policy = Policy()
 policy.register()
 # ... use policy ...
 policy.unregister()
 
 # Or as a context manager (recommended)
-with Policy(GlobalStore()) as policy:
+with Policy() as policy:
     # Policy is registered here
     pass
 # Policy is unregistered when exiting
 ```
 
+If you need a different store type, you can pass it explicitly:
+
+```python
+from vsengine.policy import Policy, ThreadLocalStore
+
+with Policy(ThreadLocalStore()) as policy:
+    ...
+```
+
 ### Creating Environments
 
 ```python
-with Policy(GlobalStore()) as policy:
+with Policy() as policy:
     env = policy.new_environment()
     try:
         with env.use():

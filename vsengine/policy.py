@@ -328,16 +328,16 @@ class Policy(AbstractContextManager["Policy"]):
 
     _managed: _ManagedPolicy
 
-    def __init__(self, store: EnvironmentStore, flags_creation: int = 0) -> None:
+    def __init__(self, store: EnvironmentStore | None = None, flags_creation: int = 0) -> None:
         """
         Initializes a new Policy
 
         Args:
-            store: The store to use for managing environments.
+            store: The store to use for managing environments. If None, defaults to a GlobalStore.
             flags_creation: The flags to use when creating environments.
                             See vapoursynth.CoreCreationFlags for more information.
         """
-        self._managed = _ManagedPolicy(store)
+        self._managed = _ManagedPolicy(store or GlobalStore())
         self.flags_creation = flags_creation
 
     def __enter__(self) -> Self:

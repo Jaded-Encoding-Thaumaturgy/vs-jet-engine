@@ -28,10 +28,10 @@ with load_code("vs.core.std.BlankClip().set_output()") as script:
 Load and execute a `.vpy` file:
 
 ```python
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import Policy
 from vsengine.vpy import load_script
 
-with Policy(GlobalStore()) as policy:
+with Policy() as policy:
     # Creates a new environment from the policy
     script = load_script("/path/to/script.vpy", policy)
     script.result()  # Execute and wait
@@ -46,7 +46,7 @@ with Policy(GlobalStore()) as policy:
 Execute inline VapourSynth code:
 
 ```python
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import Policy
 from vsengine.vpy import load_code
 
 code = """
@@ -55,7 +55,7 @@ clip = vs.core.std.BlankClip(width=1920, height=1080)
 clip.set_output()
 """
 
-with Policy(GlobalStore()) as policy, load_code(code, policy) as script:
+with Policy() as policy, load_code(code, policy) as script:
     print(script.environment.outputs)
 ```
 
@@ -177,10 +177,10 @@ script.dispose()
 The recommended pattern uses context managers for automatic cleanup:
 
 ```python
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import Policy
 from vsengine.vpy import load_script
 
-with Policy(GlobalStore()) as policy, load_script("script.vpy", policy) as script:
+with Policy() as policy, load_script("script.vpy", policy) as script:
     # script.result() is called automatically on __enter__
     outputs = script.environment.outputs
     print(f"Found {len(outputs)} outputs")
