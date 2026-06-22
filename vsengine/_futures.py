@@ -12,12 +12,19 @@ from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from functools import wraps
 from inspect import isgeneratorfunction
 from types import TracebackType
-from typing import Any, Literal, Self, overload
+from typing import Any, Literal, Protocol, Self, overload
 
 from vsengine.loops import get_loop, keep_environment
 
 
-class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncContextManager[T, Any], Awaitable[T]):
+class FutureLike[V](Protocol):
+    def result(self) -> V: ...
+
+
+class AsyncFutureLike[V](Protocol):
+    async def awaitable(self) -> V: ...
+
+class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncContextManager[Any], Awaitable[T]):
     @classmethod
     def from_call[**P](cls, func: Callable[P, Future[T]], *args: P.args, **kwargs: P.kwargs) -> Self:
         try:
@@ -106,7 +113,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncC
         return self.then(None, cb)
 
     # Nicer Syntax
-    def __enter__(self) -> T:
+    def __enter__[EnterT](self: FutureLike[AbstractContextManager[EnterT, Any]]) -> EnterT:
         obj = self.result()
 
         if isinstance(obj, AbstractContextManager):
@@ -114,7 +121,12 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncC
 
         raise NotImplementedError("(async) with is not implemented for this object")
 
-    def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(
+        self,
+        exc: type[BaseException] | None,
+        val: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
         obj = self.result()
 
         if isinstance(obj, AbstractContextManager):
@@ -128,7 +140,9 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncC
     def __await__(self) -> Generator[Any, None, T]:
         return self.awaitable().__await__()
 
-    async def __aenter__(self) -> T:
+    async def __aenter__[EnterT](
+        self: AsyncFutureLike[AbstractAsyncContextManager[EnterT, Any] | AbstractContextManager[EnterT, Any]],
+    ) -> EnterT:
         result = await self.awaitable()
 
         if isinstance(result, AbstractAsyncContextManager):
@@ -139,8 +153,11 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncC
         raise NotImplementedError("(async) with is not implemented for this object")
 
     async def __aexit__(
-        self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None
-    ) -> None:
+        self,
+        exc: type[BaseException] | None,
+        val: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
         result = await self.awaitable()
 
         if isinstance(result, AbstractAsyncContextManager):
