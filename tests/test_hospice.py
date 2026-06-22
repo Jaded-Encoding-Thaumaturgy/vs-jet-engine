@@ -9,7 +9,7 @@ import contextlib
 import gc
 import logging
 import weakref
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from typing import Any
 
 import pytest
@@ -53,7 +53,7 @@ class MockEnv:
 
 
 @contextlib.contextmanager
-def hide_logs() -> Iterator[None]:
+def hide_logs() -> Generator[None]:
     logging.disable(logging.CRITICAL)
     try:
         yield

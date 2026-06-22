@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from logging import getLogger
@@ -272,7 +272,7 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
         del self._data
 
     @contextmanager
-    def inline_section(self) -> Iterator[None]:
+    def inline_section(self) -> Generator[None]:
         """
         Private API!
 
@@ -295,7 +295,7 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
             self._policy.managed.inline_section_end()
 
     @contextmanager
-    def use(self) -> Iterator[None]:
+    def use(self) -> Generator[None]:
         """
         Switches to this environment within a block.
         """

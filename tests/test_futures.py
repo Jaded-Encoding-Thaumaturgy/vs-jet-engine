@@ -7,7 +7,7 @@
 
 import contextlib
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import Future
 from typing import Any
 
@@ -32,7 +32,7 @@ def reject(err: BaseException) -> Future[Any]:
 
 def contextmanager_helper() -> Future[Any]:
     @contextlib.contextmanager
-    def noop() -> Iterator[int]:
+    def noop() -> Generator[int]:
         yield 1
 
     return resolve(noop())
@@ -40,7 +40,7 @@ def contextmanager_helper() -> Future[Any]:
 
 def asynccontextmanager_helper() -> Future[Any]:
     @contextlib.asynccontextmanager
-    async def noop() -> AsyncIterator[int]:
+    async def noop() -> AsyncGenerator[int]:
         yield 2
 
     return resolve(noop())

@@ -4,7 +4,7 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Generator
 
 import vapoursynth as vs
 
@@ -13,7 +13,7 @@ from vsengine.policy import ManagedEnvironment
 
 # Automatically set the environment within that block.
 @contextlib.contextmanager
-def use_inline(function_name: str, env: vs.Environment | ManagedEnvironment | None) -> Iterator[None]:
+def use_inline(function_name: str, env: vs.Environment | ManagedEnvironment | None) -> Generator[None]:
     if env is None:
         # Ensure there is actually an environment set in this block.
         try:

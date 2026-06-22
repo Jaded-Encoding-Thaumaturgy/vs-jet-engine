@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import contextlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from concurrent.futures import Future
 
 import trio
@@ -100,7 +100,7 @@ class TrioEventLoop(EventLoop):
                 raise exc
 
     @contextlib.contextmanager
-    def wrap_cancelled(self) -> Iterator[None]:
+    def wrap_cancelled(self) -> Generator[None]:
         try:
             yield
         except Cancelled:

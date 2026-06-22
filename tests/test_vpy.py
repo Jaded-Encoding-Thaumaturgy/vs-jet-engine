@@ -15,7 +15,7 @@ import textwrap
 import threading
 import types
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +44,7 @@ PATH: str = os.path.join(DIR, "fixtures", "test.vpy")
 
 
 @contextlib.contextmanager
-def noop() -> Iterator[None]:
+def noop() -> Generator[None]:
     yield
 
 

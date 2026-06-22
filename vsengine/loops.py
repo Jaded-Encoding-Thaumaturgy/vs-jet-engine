@@ -8,7 +8,7 @@
 
 import threading
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Generator
 from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager
 from functools import wraps
@@ -23,7 +23,7 @@ class Cancelled(BaseException):
 
 
 @contextmanager
-def _noop() -> Iterator[None]:
+def _noop() -> Generator[None]:
     yield
 
 
@@ -126,7 +126,7 @@ class EventLoop:
         raise NotImplementedError
 
     @contextmanager
-    def wrap_cancelled(self) -> Iterator[None]:
+    def wrap_cancelled(self) -> Generator[None]:
         """
         Context manager to translate cancellation exceptions.
 

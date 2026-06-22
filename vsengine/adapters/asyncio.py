@@ -7,7 +7,7 @@
 import asyncio
 import contextlib
 import contextvars
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from concurrent.futures import Future
 
 from vsengine.loops import Cancelled, EventLoop
@@ -78,7 +78,7 @@ class AsyncIOLoop(EventLoop):
             return await asyncio.wrap_future(future, loop=self.loop)
 
     @contextlib.contextmanager
-    def wrap_cancelled(self) -> Iterator[None]:
+    def wrap_cancelled(self) -> Generator[None]:
         try:
             yield
         except Cancelled:

@@ -42,7 +42,7 @@ class AdapterTest:
     """Base class for event loop adapter tests."""
 
     @contextlib.contextmanager
-    def with_loop(self) -> Iterator[EventLoop]:
+    def with_loop(self) -> Generator[EventLoop]:
         loop = self.make_loop()
         set_loop(loop)
         try:
@@ -60,7 +60,7 @@ class AdapterTest:
         raise NotImplementedError
 
     @contextlib.contextmanager
-    def assert_cancelled(self) -> Iterator[None]:
+    def assert_cancelled(self) -> Generator[None]:
         raise NotImplementedError
 
     @make_async
@@ -216,7 +216,7 @@ class TestNoLoop(AdapterTest):
                 pass
 
     @contextlib.contextmanager
-    def assert_cancelled(self) -> Iterator[None]:
+    def assert_cancelled(self) -> Generator[None]:
         with pytest.raises(CancelledError):
             yield
 
@@ -244,7 +244,7 @@ class TestAsyncIO(AsyncAdapterTest):
         return await asyncio.wait_for(coro, timeout)
 
     @contextlib.contextmanager
-    def assert_cancelled(self) -> Iterator[None]:
+    def assert_cancelled(self) -> Generator[None]:
         with pytest.raises(asyncio.CancelledError):
             yield
 
@@ -309,6 +309,6 @@ else:
                 return await coro
 
         @contextlib.contextmanager
-        def assert_cancelled(self) -> Iterator[None]:
+        def assert_cancelled(self) -> Generator[None]:
             with pytest.raises(trio.Cancelled):
                 yield
