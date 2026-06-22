@@ -114,7 +114,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         # The done_callback should inherit the environment of the current call.
         super().add_done_callback(keep_environment(fn))
 
-    def add_loop_callback(self, func: Callable[[Future[T]], Any]) -> None:
+    def add_loop_callback(self, func: Callable[[Future[T]], Any]) -> UnifiedFuture[T]:
         """
         Register a callback that is guaranteed to run on the event-loop thread.
 
@@ -122,12 +122,26 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         this method marshals `func` back to the main event loop via `EventLoop.from_thread`.
 
         :param func: A callable that receives the completed future.
+        :return: A UnifiedFuture that resolves to the original future's result once the callback completes
+            on the event loop.
         """
+        result = UnifiedFuture[T]()
 
         def _wrapper(future: Future[T]) -> None:
-            get_loop().from_thread(func, future)
+            loop_fut = get_loop().from_thread(func, future)
+
+            def _forward(lf: Future[Any]) -> None:
+                if (exc := lf.exception()) is not None:
+                    result.set_exception(exc)
+                elif (orig_exc := future.exception()) is not None:
+                    result.set_exception(orig_exc)
+                else:
+                    result.set_result(future.result())
+
+            loop_fut.add_done_callback(_forward)
 
         self.add_done_callback(_wrapper)
+        return result
 
     # Manipulating futures
     @overload

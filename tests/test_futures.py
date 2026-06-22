@@ -141,9 +141,6 @@ def test_unified_future_catch() -> None:
 
 @pytest.mark.asyncio
 async def test_unified_future_add_loop_callback() -> None:
-    from vsengine.adapters.asyncio import AsyncIOLoop
-    from vsengine.loops import set_loop
-
     set_loop(AsyncIOLoop())
 
     def _init_thread(fut: Future[threading.Thread]) -> None:
@@ -168,6 +165,32 @@ async def test_unified_future_add_loop_callback() -> None:
     cb_thread = await unified_fut
 
     assert cb_thread != loop_thread
+
+
+@pytest.mark.asyncio
+async def test_unified_future_add_loop_callback_chaining() -> None:
+    set_loop(AsyncIOLoop())
+
+    fut = Future[int]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    recorded_value: int | None = None
+
+    def _side_effect(f: Future[int]) -> None:
+        nonlocal recorded_value
+        recorded_value = f.result() * 2
+
+    chained_fut = unified_fut.add_loop_callback(_side_effect)
+
+    results = list[int]()
+    chained_fut.then(lambda val: results.append(val))
+
+    fut.set_result(21)
+
+    res = await chained_fut
+    assert res == 21
+    assert results == [21]
+    assert recorded_value == 42
 
 
 # UnifiedIterator tests
