@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 from __future__ import annotations
 
+import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterator
 from concurrent.futures import Future
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -211,8 +212,6 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
                         state.set_exception(next_cycle.exception())
                         return
             except Exception as e:
-                import traceback
-
                 traceback.print_exception(e)
                 state.set_exception(e)
 
