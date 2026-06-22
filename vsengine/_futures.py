@@ -14,7 +14,7 @@ from inspect import isgeneratorfunction
 from types import TracebackType
 from typing import Any, Literal, Self, overload
 
-from vsengine.loops import Cancelled, get_loop, keep_environment
+from vsengine.loops import get_loop, keep_environment
 
 
 class UnifiedFuture[T](Future[T], AbstractContextManager[T, Any], AbstractAsyncContextManager[T, Any], Awaitable[T]):
@@ -166,16 +166,8 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
     def run_as_completed(self, callback: Callable[[Future[T]], Any]) -> UnifiedFuture[None]:
         state = UnifiedFuture[None]()
 
-        def _is_done_or_cancelled() -> bool:
-            if state.done():
-                return True
-            if state.cancelled():
-                state.set_exception(Cancelled())
-                return True
-            return False
-
         def _get_next_future() -> Future[T] | None:
-            if _is_done_or_cancelled():
+            if state.done():
                 return None
 
             try:
@@ -233,7 +225,7 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         def _run_single_callback(fut: Future[T]) -> bool:
             # True   => Schedule next future.
             # False  => Cancel the loop.
-            if _is_done_or_cancelled():
+            if state.done():
                 return False
 
             try:
