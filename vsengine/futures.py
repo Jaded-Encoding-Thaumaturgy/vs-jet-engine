@@ -466,6 +466,14 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         return await get_loop().await_future(fut)
 
 
+class _UnifiedIteratorDecorator[U: UnifiedIterator[Any]](Protocol):
+    def __call__[**P](self, func: Callable[P, Iterator[Future[Any]]]) -> Callable[P, U]: ...
+
+
+class _UnifiedFutureDecorator[U: UnifiedFuture[Any]](Protocol):
+    def __call__[**P](self, func: Callable[P, Future[Any]]) -> Callable[P, U]: ...
+
+
 @overload
 def unified[T, **P](
     *,
@@ -487,37 +495,19 @@ def unified[T, **P](
 
 
 @overload
-def unified[T, **P](
+def unified[U: UnifiedIterator[Any]](
     *,
     kind: Literal["generator"],
-    iterable_class: type[UnifiedIterator[T]],
-) -> Callable[
-    [Callable[P, Iterator[Future[T]]]],
-    Callable[P, UnifiedIterator[T]],
-]: ...
+    iterable_class: type[U],
+) -> _UnifiedIteratorDecorator[U]: ...
 
 
 @overload
-def unified[T, **P](
+def unified[U: UnifiedFuture[Any]](
     *,
     kind: Literal["future"],
-    future_class: type[UnifiedFuture[T]],
-) -> Callable[
-    [Callable[P, Future[T]]],
-    Callable[P, UnifiedFuture[T]],
-]: ...
-
-
-@overload
-def unified[T, **P](
-    *,
-    kind: Literal["auto"] = "auto",
-    iterable_class: type[UnifiedIterator[Any]] = ...,
-    future_class: type[UnifiedFuture[Any]] = ...,
-) -> Callable[
-    [Callable[P, Future[T] | Iterator[Future[T]]]],
-    Callable[P, UnifiedFuture[T] | UnifiedIterator[T]],
-]: ...
+    future_class: type[U],
+) -> _UnifiedFutureDecorator[U]: ...
 
 
 # Implementation
@@ -580,9 +570,7 @@ def unified[T, **P](
         func: Callable[P, Iterator[Future[T]]] | Callable[P, Future[T]],
     ) -> Callable[P, UnifiedIterator[T]] | Callable[P, UnifiedFuture[T]]:
         if kind == "auto":
-            if isgeneratorfunction(func):
-                return _decorator_generator(func)
-            return _decorator_future(func)  # type:ignore[arg-type]
+            return _decorator_generator(func) if isgeneratorfunction(func) else _decorator_future(func)  # type:ignore[arg-type]
 
         if kind == "generator":
             return _decorator_generator(func)  # type:ignore[arg-type]
