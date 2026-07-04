@@ -9,38 +9,38 @@ import contextlib
 import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import Future
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.futures import UnifiedFuture, UnifiedIterator, unified
-from vsengine.loops import NO_LOOP, set_loop
+from vsengine.loops import NO_LOOP, _NoEventLoop, set_loop
 
 
-def resolve(value: Any) -> Future[Any]:
-    fut = Future[Any]()
+def resolve[T](value: T) -> Future[T]:
+    fut = Future[T]()
     fut.set_result(value)
     return fut
 
 
-def reject(err: BaseException) -> Future[Any]:
-    fut = Future[Any]()
+def reject(err: BaseException) -> Future[None]:
+    fut = Future[None]()
     fut.set_exception(err)
     return fut
 
 
-def contextmanager_helper() -> Future[Any]:
+def contextmanager_helper() -> Future[contextlib.AbstractContextManager[Literal[1]]]:
     @contextlib.contextmanager
-    def noop() -> Generator[int]:
+    def noop() -> Generator[Literal[1]]:
         yield 1
 
     return resolve(noop())
 
 
-def asynccontextmanager_helper() -> Future[Any]:
+def asynccontextmanager_helper() -> Future[contextlib.AbstractAsyncContextManager[Literal[2]]]:
     @contextlib.asynccontextmanager
-    async def noop() -> AsyncGenerator[int]:
+    async def noop() -> AsyncGenerator[Literal[2]]:
         yield 2
 
     return resolve(noop())
@@ -50,11 +50,11 @@ def succeeds() -> Future[int]:
     return resolve(1)
 
 
-def fails() -> Future[Any]:
+def fails() -> Future[None]:
     return reject(RuntimeError())
 
 
-def fails_early() -> Future[Any]:
+def fails_early() -> Future[None]:
     raise RuntimeError()
 
 
@@ -65,10 +65,19 @@ def future_iterator() -> Iterator[Future[int]]:
         n += 1
 
 
-class WrappedUnifiedFuture(UnifiedFuture[Any]): ...
+class WrappedUnifiedFuture[T](UnifiedFuture[T]): ...
 
 
-class WrappedUnifiedIterable(UnifiedIterator[Any]): ...
+class WrappedUnifiedIterable[T](UnifiedIterator[T]): ...
+
+
+class FakeContextManager:
+    if TYPE_CHECKING:
+
+        def __enter__(self) -> None: ...
+        def __exit__(self, *_: object) -> None: ...
+        async def __aenter__(self) -> None: ...
+        async def __aexit__(self, *_: object) -> None: ...
 
 
 # UnifiedFuture tests
@@ -369,8 +378,7 @@ def test_unified_iterator_run_as_completed_requests_as_needed() -> None:
     requested: list[Future[int]] = []
     continued: list[Future[int]] = []
 
-    def _add_to_result(f: Future[int]) -> None:
-        pass
+    def _add_to_result(f: Future[int]) -> None: ...
 
     def _it() -> Iterator[Future[int]]:
         for fut in my_futures:
@@ -402,10 +410,9 @@ def test_unified_iterator_run_as_completed_cancels_on_iterator_crash() -> None:
             yield Future[int]()  # type:ignore[unreachable]
         raise err
 
-    def _noop(_: Future[int]) -> None:
-        pass
+    def noop(_: Future[int]) -> None: ...
 
-    state = UnifiedIterator(_it()).run_as_completed(_noop)
+    state = UnifiedIterator(_it()).run_as_completed(noop)
     assert state.done()
     assert state.exception() is err
 
@@ -439,7 +446,7 @@ async def test_unified_iterator_can_aiter() -> None:
 
 
 def test_unified_auto_future_return_a_unified_future() -> None:
-    @unified()
+    @unified(kind="future")
     def test_func() -> Future[int]:
         return resolve(9999)
 
@@ -449,7 +456,7 @@ def test_unified_auto_future_return_a_unified_future() -> None:
 
 
 def test_unified_auto_generator_return_a_unified_iterable() -> None:
-    @unified()
+    @unified(kind="generator")
     def test_func() -> Iterator[Future[int]]:
         yield resolve(1)
         yield resolve(2)
@@ -472,7 +479,7 @@ def test_unified_generator_accepts_other_iterables() -> None:
 
 
 def test_unified_custom_future() -> None:
-    @unified(future_class=WrappedUnifiedFuture)
+    @unified(kind="future", future_class=WrappedUnifiedFuture[int])
     def test_func() -> Future[int]:
         return resolve(9999)
 
@@ -481,9 +488,199 @@ def test_unified_custom_future() -> None:
 
 
 def test_unified_custom_generator() -> None:
-    @unified(iterable_class=WrappedUnifiedIterable)
+    @unified(kind="generator", iterable_class=WrappedUnifiedIterable[int])
     def test_func() -> Iterator[Future[int]]:
         yield resolve(9999)
 
     f = test_func()
     assert isinstance(f, WrappedUnifiedIterable)
+
+
+def test_from_call_sync_exception() -> None:
+    def sync_fail() -> Future[None]:
+        raise ValueError("fails_early")
+
+    fut = UnifiedFuture.from_call(sync_fail)
+    assert isinstance(fut.exception(), ValueError)
+
+
+def test_reject_directly() -> None:
+    fut = UnifiedFuture.reject(ValueError("rejected"))
+    assert isinstance(fut.exception(), ValueError)
+
+
+@pytest.mark.asyncio
+async def test_add_loop_callback_failed_future() -> None:
+    set_loop(AsyncIOLoop())
+    fut = Future[None]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    def noop(_: Future[None]) -> None: ...
+
+    chained = unified_fut.add_loop_callback(noop)
+    fut.set_exception(ValueError("original error"))
+
+    with pytest.raises(ValueError, match="original error"):
+        await chained
+
+
+@pytest.mark.asyncio
+async def test_add_loop_callback_callback_exception() -> None:
+    set_loop(AsyncIOLoop())
+    fut = Future[int]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    def _callback_fail(_: Future[int]) -> None:
+        raise ValueError("callback error")
+
+    chained = unified_fut.add_loop_callback(_callback_fail)
+    fut.set_result(42)
+
+    with pytest.raises(ValueError, match="callback error"):
+        await chained
+
+
+@pytest.mark.asyncio
+async def test_then_on_loop_callback_exception() -> None:
+    set_loop(AsyncIOLoop())
+    fut = Future[int]()
+    unified_fut = UnifiedFuture.from_future(fut)
+
+    def _callback_fail(_: int) -> int:
+        raise ValueError("then callback error")
+
+    chained = unified_fut.then(_callback_fail, on_loop=True)
+    fut.set_result(42)
+
+    with pytest.raises(ValueError, match="then callback error"):
+        await chained
+
+
+def test_context_manager_not_implemented() -> None:
+    fut = UnifiedFuture.resolve(FakeContextManager())
+    with pytest.raises(NotImplementedError), fut:
+        ...
+
+    with pytest.raises(NotImplementedError):
+        fut.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_not_implemented() -> None:
+    set_loop(AsyncIOLoop())
+    fut = UnifiedFuture.resolve(FakeContextManager())
+    with pytest.raises(NotImplementedError):
+        async with fut:
+            ...
+
+    with pytest.raises(NotImplementedError):
+        await fut.__aexit__(None, None, None)
+
+
+def test_run_as_completed_external_cancel() -> None:
+    set_loop(NO_LOOP)
+    my_futures = [Future[int](), Future[int]()]
+
+    def noop(_: Future[int]) -> None: ...
+
+    state = UnifiedIterator(iter(my_futures)).run_as_completed(noop)
+    assert not state.done()
+
+    # Cancel the state future externally
+    state.cancel()
+    assert state.done()
+    assert state.cancelled()
+
+    # Resolving futures now should not raise error but also not run callback since state is done
+    my_futures[0].set_result(1)
+
+
+def test_run_as_completed_sync_cancel() -> None:
+    set_loop(NO_LOOP)
+    f1 = resolve(1)
+    f2 = resolve(2)
+    results = list[int]()
+
+    def cb(f: Future[int]) -> bool:
+        results.append(f.result())
+        return False  # signal early stop
+
+    state = UnifiedIterator(iter([f1, f2])).run_as_completed(cb)
+    assert state.done()
+    assert results == [1]
+
+
+@pytest.mark.asyncio
+async def test_run_as_completed_async_loop() -> None:
+    set_loop(AsyncIOLoop())
+    my_futures = [Future[int](), Future[int]()]
+    results = list[int]()
+
+    def cb(f: Future[int]) -> None:
+        results.append(f.result())
+
+    state = UnifiedIterator(iter(my_futures)).run_as_completed(cb)
+    my_futures[0].set_result(10)
+    my_futures[1].set_result(20)
+
+    try:
+        await state
+        assert results == [10, 20]
+    finally:
+        set_loop(NO_LOOP)
+
+
+def test_run_as_completed_next_cycle_fails() -> None:
+    set_loop(NO_LOOP)
+
+    class CustomFailedLoop(_NoEventLoop):
+        def next_cycle(self) -> Future[None]:
+            fut = Future[None]()
+            fut.set_exception(ValueError("next_cycle failed"))
+            return fut
+
+    set_loop(CustomFailedLoop())
+
+    try:
+        f1 = resolve(1)
+        f2 = resolve(2)
+
+        def noop(_: Future[int]) -> None: ...
+
+        state = UnifiedIterator(iter([f1, f2])).run_as_completed(noop)
+        assert state.done()
+        assert isinstance(state.exception(), ValueError)
+    finally:
+        set_loop(NO_LOOP)
+
+
+def test_run_as_completed_next_cycle_fails_async() -> None:
+    set_loop(NO_LOOP)
+
+    class CustomPendingFailedLoop(_NoEventLoop):
+        def __init__(self) -> None:
+            self.next_cycle_futs = list[Future[None]]()
+
+        def next_cycle(self) -> Future[None]:
+            fut = Future[None]()
+            self.next_cycle_futs.append(fut)
+            return fut
+
+    custom_loop = CustomPendingFailedLoop()
+    set_loop(custom_loop)
+
+    try:
+        f1 = resolve(1)
+        f2 = resolve(2)
+
+        def noop(_: Future[int]) -> None: ...
+
+        state = UnifiedIterator(iter([f1, f2])).run_as_completed(noop)
+        assert not state.done()
+
+        # Now fail the next_cycle future
+        custom_loop.next_cycle_futs[0].set_exception(ValueError("next_cycle async failed"))
+        assert state.done()
+        assert isinstance(state.exception(), ValueError)
+    finally:
+        set_loop(NO_LOOP)

@@ -6,6 +6,8 @@
 """Tests for the policy system."""
 
 import contextlib
+import gc
+import weakref
 from collections.abc import Iterator
 
 import pytest
@@ -79,6 +81,7 @@ class TestManagedEnvironment:
         env = registered_policy.new_environment()
         with pytest.warns(ResourceWarning):
             del env
+            gc.collect()
 
     def test_new_environment_can_dispose(self, registered_policy: Policy) -> None:
         env = registered_policy.new_environment()
@@ -129,3 +132,30 @@ class TestManagedEnvironment:
 
             assert vapoursynth.get_current_environment() == env1.vs_environment
             assert env_before == store.get_current_environment()
+
+    def test_dead_environment_reference(self, registered_policy: Policy) -> None:
+        class Dummy: ...
+
+        d = Dummy()
+        registered_policy.managed._store.set_current_environment(weakref.ref(d))  # type: ignore[arg-type]
+        del d
+        gc.collect()
+
+        assert registered_policy.managed.get_current_environment() is None
+
+    def test_destroyed_environment_checks(self, registered_policy: Policy) -> None:
+        env = registered_policy.new_environment()
+        _data = env._data
+
+        # Destroy it directly through VapourSynth API
+        registered_policy.api.destroy_environment(_data)
+
+        # Retrieve the environment: it shouldn't be alive, so get_current_environment should return None
+        registered_policy.managed._store.set_current_environment(weakref.ref(_data))
+        assert registered_policy.managed.get_current_environment() is None
+
+        # Try to set the destroyed environment: should set it to None because it's not alive
+        registered_policy.managed.set_environment(_data)
+        assert registered_policy.managed.get_current_environment() is None
+
+        del env._data

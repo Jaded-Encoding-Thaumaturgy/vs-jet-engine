@@ -577,3 +577,33 @@ def test_load_script_adds_to_path(tmp_path: Path) -> None:
         load_script(script_path).result()
 
     assert BLACKBOARD["module_val"] == 42
+
+
+def test_chdir_runner_on_error() -> None:
+    def fail() -> None:
+        raise ValueError("test_error")
+
+    wrapped = chdir_runner(DIR, inline_runner)
+    before = os.getcwd()
+    fut = wrapped(fail)
+    assert isinstance(fut.exception(), ValueError)
+    assert os.getcwd() == before
+
+
+def test_script_get_variable() -> None:
+    with Policy(GlobalStore()) as p, load_code("val = 100", p) as s:
+        assert s.get_variable("val").result() == 100
+        # Test default value when not found
+        assert s.get_variable("missing_val", 42).result() == 42
+        # Test raising AttributeError when not found and no default
+        with pytest.raises(AttributeError):
+            s.get_variable("missing_val").result()
+
+
+def test_load_code_with_script_as_environment() -> None:
+    with (
+        Policy(GlobalStore()) as p,
+        load_code("val = 42", p) as s1,
+        load_code("assert val == 42", s1),
+    ):
+        ...

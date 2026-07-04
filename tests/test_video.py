@@ -8,7 +8,7 @@
 from collections.abc import Iterator
 
 import pytest
-from vapoursynth import GRAY8, RGB24, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
+from vapoursynth import GRAY8, RGB24, Error, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
 
 from tests._testutils import use_standalone_policy
 from vsengine.video import frame, frames, planes, render
@@ -257,3 +257,34 @@ def test_render_single_frame_y4m() -> None:
     assert data[0][1].startswith(b"YUV4MPEG2")
     assert data[1][0] == 1  # First frame is 1
     assert b"FRAME\n" in data[1][1]
+
+
+def test_render_exception_handling() -> None:
+    clip = generate_video(length=3)
+
+    # Modify frame 1 to raise an exception
+    def _add_frameno_with_error(n: int, f: VideoFrame) -> VideoFrame:
+        if n == 1:
+            raise RuntimeError("Intentional error for testing")
+        fout = f.copy()
+        fout.props["FrameNumber"] = n
+        return fout
+
+    clip_err = core.std.ModifyFrame(clip=clip, clips=clip, selector=_add_frameno_with_error)
+
+    # Test close_when_needed exception propagation
+    # We set prefetch/backlog to 0/None to test close_when_needed without buffer_futures
+    with pytest.raises(Error, match="Intentional error for testing"):
+        list(frames(clip_err, prefetch=0, backlog=0))
+
+    # Test buffer_futures exception handling
+    # Render uses buffer_futures, and should raise the exception.
+    with pytest.raises(Error, match="Intentional error for testing"):
+        list(render(clip_err, prefetch=2, backlog=4))
+
+
+def test_render_backlog_less_than_prefetch() -> None:
+    clip = generate_video(length=5)
+    # This will trigger backlog = prefetch line in buffer_futures
+    data = b"".join(f[1] for f in render(clip, prefetch=4, backlog=2))
+    assert data == b"\0\0\0\0\0"
