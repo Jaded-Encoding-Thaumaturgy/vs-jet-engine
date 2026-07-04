@@ -621,7 +621,7 @@ dev = [
 requires-dist = [
     { name = "pytest", marker = "extra == 'pytest'", specifier = ">=9.1.0" },
     { name = "trio", marker = "extra == 'trio'" },
-    { name = "vapoursynth", specifier = ">=69" },
+    { name = "vapoursynth", specifier = ">=74" },
 ]
 provides-extras = ["pytest", "trio"]
 
