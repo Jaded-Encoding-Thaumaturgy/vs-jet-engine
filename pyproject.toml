@@ -35,14 +35,18 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 trio = ["trio"]
+pytest = ["pytest>=9.1.0"]
+
+[project.entry-points.pytest11]
+vsengine = "vsengine.pytest"
 
 [dependency-groups]
 dev = [
-    "mypy>=1.19.0",
-    "pytest>=9.0.1",
+    "mypy>=2.1.0",
+    "pytest>=9.1.0",
     "pytest-cov>=7.0.0",
     "pytest-asyncio>=0.24.0",
-    "ruff>=0.14.7",
+    "ruff>=0.15.20",
     "trio",
     "vsstubs ; python_version>='3.13'",
 ]
@@ -69,9 +73,12 @@ exclude = ["tests"]
 include = ["vsengine", "tests"]
 
 [tool.pytest.ini_options]
-pythonpath = "."
+testpaths = "tests"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+omit = ["vsengine/_version.py", "vsengine/__init__.py", "tests/*"]
 
 [tool.mypy]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"

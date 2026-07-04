@@ -29,6 +29,7 @@ with Policy(GlobalStore()) as policy, load_script("/path/to/script.vpy", policy)
 - **[Environment Policy](docs/policy.md)** - Managing VapourSynth environments with stores
 - **[Event Loops](docs/loops.md)** - Integration with asyncio, Trio, and custom loops
 - **[Script Execution](docs/vpy.md)** - Loading and running VapourSynth scripts
+- **[Pytest Integration](docs/pytest.md)** - Isolating tests and detecting core memory leaks
 
 ## Contributing
 
