@@ -73,14 +73,14 @@ The same error message is shown.
 
 ## Fixtures
 
-### `vpy_stages`
+### `vpy_stage`
 
 Returns the name of the current stage as a `str`. Only meaningful inside a `@pytest.mark.vpy` test.
 
 ```python
 @pytest.mark.vpy
-def test_stage_info(vpy_stages: str) -> None:
-    print(f"Running in: {vpy_stages}")  # "initial-core" or "reloaded-core"
+def test_stage_info(vpy_stage: str) -> None:
+    print(f"Running in: {vpy_stage}")  # "initial-core" or "reloaded-core"
 ```
 
 ## Session Lifecycle

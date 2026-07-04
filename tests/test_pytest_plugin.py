@@ -87,8 +87,9 @@ def test_pytest_configure() -> None:
     assert "vpy" in config.added_lines[0][1]
 
 
-def test_vpy_stages_fixture(vpy_stages: str) -> None:
-    assert vpy_stages in vpy_pytest.DEFAULT_STAGES
+@pytest.mark.vpy
+def test_vpy_stage_fixture(vpy_stage: str) -> None:
+    assert vpy_stage in vpy_pytest.DEFAULT_STAGES
 
 
 def test_pytest_session_hooks(restore_pytest_globals: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,15 +183,15 @@ def test_pytest_generate_tests() -> None:
     # Case 2: marker with args
     meta2 = MockMetafunc(MockMarker(("stage-a", "stage-b")))
     vpy_pytest.pytest_generate_tests(meta2)  # type: ignore[arg-type]
-    assert "__vpy_stage" in meta2.fixturenames
-    assert meta2.parametrized == [("__vpy_stage", ["stage-a", "stage-b"], ("stage-a", "stage-b"))]
+    assert "vpy_stage" in meta2.fixturenames
+    assert meta2.parametrized == [("vpy_stage", ["stage-a", "stage-b"], ("stage-a", "stage-b"))]
 
     # Case 3: marker with empty args (fallback to DEFAULT_STAGES)
     meta3 = MockMetafunc(MockMarker(()))
     vpy_pytest.pytest_generate_tests(meta3)  # type: ignore[arg-type]
-    assert "__vpy_stage" in meta3.fixturenames
+    assert "vpy_stage" in meta3.fixturenames
 
-    assert meta3.parametrized == [("__vpy_stage", list(vpy_pytest.DEFAULT_STAGES), vpy_pytest.DEFAULT_STAGES)]
+    assert meta3.parametrized == [("vpy_stage", list(vpy_pytest.DEFAULT_STAGES), vpy_pytest.DEFAULT_STAGES)]
 
 
 def test_pytest_collection_modifyitems(request: pytest.FixtureRequest) -> None:
@@ -222,10 +223,10 @@ def test_pytest_collection_modifyitems(request: pytest.FixtureRequest) -> None:
     # Case 2: collectonly is False, with some vpy items, other items, and invalid stage item (line 101)
     config_run: Any = MockConfig(collectonly=False)
     p = Path("test.py")
-    item_vpy_initial = MockItem(p, MockCallspec({"__vpy_stage": "initial-core"}), parent=request.node)
-    item_vpy_reloaded = MockItem(p, MockCallspec({"__vpy_stage": "reloaded-core"}), parent=request.node)
+    item_vpy_initial = MockItem(p, MockCallspec({"vpy_stage": "initial-core"}), parent=request.node)
+    item_vpy_reloaded = MockItem(p, MockCallspec({"vpy_stage": "reloaded-core"}), parent=request.node)
     item_vpy_invalid = MockItem(
-        p, MockCallspec({"__vpy_stage": "invalid-stage"}), parent=request.node
+        p, MockCallspec({"vpy_stage": "invalid-stage"}), parent=request.node
     )  # Line 101 target
     item_other = MockItem(p)
 
@@ -303,7 +304,7 @@ def test_pytest_runtest_call(restore_pytest_globals: None, monkeypatch: pytest.M
     vpy_pytest.current_policy = mock_policy  # type: ignore[assignment]
     vpy_pytest.current_stage = "no-core"
 
-    item2 = MockItem(MockCallspec({"__vpy_stage": "initial-core"}))
+    item2 = MockItem(MockCallspec({"vpy_stage": "initial-core"}))
     gen2 = vpy_pytest.pytest_runtest_call(item2)  # type: ignore[arg-type]
 
     class DummyOutcome:
@@ -325,7 +326,7 @@ def test_pytest_runtest_call(restore_pytest_globals: None, monkeypatch: pytest.M
     assert vpy_pytest.current_stage == "initial-core"  # type: ignore[unreachable]
 
     # Case 3: stage != current_stage (reloaded-core) with current_env not None (covers line 152)
-    item3 = MockItem(MockCallspec({"__vpy_stage": "reloaded-core"}))
+    item3 = MockItem(MockCallspec({"vpy_stage": "reloaded-core"}))
     gen3 = vpy_pytest.pytest_runtest_call(item3)  # pyright: ignore[reportArgumentType]
     next(gen3)
     outcome3 = DummyOutcome()
@@ -345,7 +346,7 @@ def test_pytest_runtest_call(restore_pytest_globals: None, monkeypatch: pytest.M
         hospice.any_alive = lambda: True
         hospice.freeze = lambda: None
 
-        item4a = MockItem(MockCallspec({"__vpy_stage": "unique-core"}))
+        item4a = MockItem(MockCallspec({"vpy_stage": "unique-core"}))
         gen4a = vpy_pytest.pytest_runtest_call(item4a)  # pyright: ignore[reportArgumentType]
         next(gen4a)
 
@@ -357,7 +358,7 @@ def test_pytest_runtest_call(restore_pytest_globals: None, monkeypatch: pytest.M
         assert isinstance(outcome4a.forced_exception, AssertionError)
         assert "Expected all environments to be cleaned up" in str(outcome4a.forced_exception)
 
-        item4b = MockItem(MockCallspec({"__vpy_stage": "unique-core"}))
+        item4b = MockItem(MockCallspec({"vpy_stage": "unique-core"}))
         gen4b = vpy_pytest.pytest_runtest_call(item4b)  # pyright: ignore[reportArgumentType]
         next(gen4b)
 
@@ -378,7 +379,7 @@ def test_pytest_runtest_call(restore_pytest_globals: None, monkeypatch: pytest.M
     monkeypatch.setattr(Policy, "new_environment", lambda self: MockEnv())
 
     vpy_pytest.current_policy = None
-    item5 = MockItem(MockCallspec({"__vpy_stage": "initial-core"}))
+    item5 = MockItem(MockCallspec({"vpy_stage": "initial-core"}))
     gen5 = vpy_pytest.pytest_runtest_call(item5)  # pyright: ignore[reportArgumentType]
     next(gen5)
     outcome5 = DummyOutcome()

@@ -40,10 +40,6 @@ current_env: ManagedEnvironment | None = None
 current_stage = "no-core"
 
 
-@pytest.fixture(params=DEFAULT_STAGES)
-def vpy_stages(request: pytest.FixtureRequest) -> str:
-    return request.param
-
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     global current_policy
@@ -66,8 +62,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if (marker := metafunc.definition.get_closest_marker("vpy")) is not None:
         stages = marker.args or DEFAULT_STAGES
-        metafunc.fixturenames.append("__vpy_stage")
-        metafunc.parametrize("__vpy_stage", list(stages), ids=stages)
+        metafunc.fixturenames.append("vpy_stage")
+        metafunc.parametrize("vpy_stage", list(stages), ids=stages)
 
 
 def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -87,8 +83,8 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
 
         for item in m_items:
             callspec = getattr(item, "callspec", None)
-            if callspec is not None and "__vpy_stage" in callspec.params:
-                stage = callspec.params["__vpy_stage"]
+            if callspec is not None and "vpy_stage" in callspec.params:
+                stage = callspec.params["vpy_stage"]
                 if stage in stages:
                     stages[stage].append(item)
                 else:
@@ -126,11 +122,11 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, pluggy.Result[Any]
     global current_stage, current_env, current_policy
 
     callspec = getattr(item, "callspec", None)
-    if callspec is None or "__vpy_stage" not in callspec.params:
+    if callspec is None or "vpy_stage" not in callspec.params:
         yield
         return
 
-    stage = str(callspec.params.get("__vpy_stage", "no-core"))
+    stage = str(callspec.params.get("vpy_stage", "no-core"))
 
     if current_policy is None:
         current_policy = Policy(GlobalStore())
