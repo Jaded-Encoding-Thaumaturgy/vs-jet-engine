@@ -1,8 +1,8 @@
 # vs-jet-engine 🚀
 
-[![Lint](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/lint.yml/badge.svg)](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/lint.yml)
-[![Tests](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/test.yml/badge.svg)](https://github.com/Jaded-Encoding-Thaumaturgy/vs-engine/actions/workflows/test.yml)
-[![Coverage Status](https://coveralls.io/repos/github/Jaded-Encoding-Thaumaturgy/vs-engine/badge.svg?branch=main)](https://coveralls.io/github/Jaded-Encoding-Thaumaturgy/vs-engine?branch=main)
+[![Lint](https://github.com/Jaded-Encoding-Thaumaturgy/vs-jet-engine/actions/workflows/lint.yml/badge.svg)](https://github.com/Jaded-Encoding-Thaumaturgy/vs-jet-engine/actions/workflows/lint.yml)
+[![Tests](https://github.com/Jaded-Encoding-Thaumaturgy/vs-jet-engine/actions/workflows/test.yml/badge.svg)](https://github.com/Jaded-Encoding-Thaumaturgy/vs-jet-engine/actions/workflows/test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/Jaded-Encoding-Thaumaturgy/vs-jet-engine/badge.svg?branch=main)](https://coveralls.io/github/Jaded-Encoding-Thaumaturgy/vs-jet-engine?branch=main)
 
 An engine for vapoursynth previewers, renderers and script analysis tools.
 
@@ -28,6 +28,7 @@ with Policy(GlobalStore()) as policy, load_script("/path/to/script.vpy", policy)
 
 - **[Environment Policy](docs/policy.md)** - Managing VapourSynth environments with stores
 - **[Event Loops](docs/loops.md)** - Integration with asyncio, Trio, and custom loops
+- **[Video Rendering](docs/video.md)** - Requesting frames and rendering clips synchronously or asynchronously
 - **[Script Execution](docs/vpy.md)** - Loading and running VapourSynth scripts
 - **[Pytest Integration](docs/pytest.md)** - Isolating tests and detecting core memory leaks
 
