@@ -34,7 +34,9 @@ jobs:
         run: uv sync --all-extras --locked
 
       - name: Run tests with coverage
-        run: uv run --with vapoursynth==${{ matrix.vapoursynth-version }} pytest tests --cov=vsengine --cov-report=xml
+        run: |
+          uv run --with vapoursynth==${{ matrix.vapoursynth-version }} coverage run --source=vsengine -m pytest tests
+          uv run --with vapoursynth==${{ matrix.vapoursynth-version }} coverage xml -o coverage.xml
 
       - name: Upload coverage to coveralls
         uses: coverallsapp/github-action@v2.3.7
