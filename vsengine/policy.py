@@ -365,6 +365,13 @@ class Policy(AbstractContextManager["Policy"]):
         """
         return self._managed
 
+    @property
+    def is_registered(self) -> bool:
+        """
+        Checks if the policy is registered with VapourSynth.
+        """
+        return hasattr(self._managed, "_api")
+
     def register(self) -> None:
         """
         Registers the policy with VapourSynth.
