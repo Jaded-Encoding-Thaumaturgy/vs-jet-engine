@@ -10,30 +10,38 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
-from collections.abc import Generator, Iterator
+from collections.abc import Awaitable, Callable, Generator, Iterator
 from concurrent.futures import CancelledError, Future
-from typing import Any
+from functools import wraps
+from inspect import isgenerator
+from typing import Any, Concatenate, Self
 
 import pytest
+import trio
 
 from vsengine.adapters.asyncio import AsyncIOLoop
-from vsengine.loops import NO_LOOP, Cancelled, EventLoop, _NoEventLoop, make_awaitable, set_loop
+from vsengine.adapters.trio import TrioEventLoop
+from vsengine.loops import NO_LOOP, Cancelled, EventLoop, _NoEventLoop, set_loop
 
 
-def make_async(func: Any) -> Any:
+def make_async[T: AdapterTest, **P](func: Callable[Concatenate[T, P], Any]) -> Callable[Concatenate[T, P], None]:
     """Decorator to run a generator-based test within a loop."""
 
-    def _wrapped(self: AdapterTest, *args: Any, **kwargs: Any) -> Any:
-        return self.run_within_loop(func, args, kwargs)
+    @wraps(func)
+    def _wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> None:
+        self.run_within_loop(func, *args, **kwargs)
 
     return _wrapped
 
 
-def is_async(func: Any) -> Any:
+def is_async[T: AsyncAdapterTest, **P](
+    func: Callable[Concatenate[T, P], Awaitable[Any]],
+) -> Callable[Concatenate[T, P], None]:
     """Decorator to run an async test within a loop."""
 
-    def _wrapped(self: AsyncAdapterTest, *args: Any, **kwargs: Any) -> Any:
-        return self.run_within_loop_async(func, args, kwargs)
+    @wraps(func)
+    def _wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> None:
+        self.run_within_loop_async(func, *args, **kwargs)
 
     return _wrapped
 
@@ -53,10 +61,15 @@ class AdapterTest:
     def make_loop(self) -> EventLoop:
         raise NotImplementedError
 
-    def run_within_loop(self, func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    def run_within_loop[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Any],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
         raise NotImplementedError
 
-    def resolve_to_thread_future(self, fut: Any) -> Generator[Any, None, Any]:
+    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
         raise NotImplementedError
 
     @contextlib.contextmanager
@@ -66,7 +79,7 @@ class AdapterTest:
     @make_async
     def test_wrap_cancelled_without_cancellation(self) -> None:
         with self.with_loop() as loop, loop.wrap_cancelled():
-            pass
+            ...
 
     @make_async
     def test_wrap_cancelled_with_cancellation(self) -> Iterator[None]:
@@ -110,20 +123,15 @@ class AdapterTest:
 
     @make_async
     def test_from_thread_forwards_correctly(self) -> Iterator[None]:
-        a: tuple[Any, ...] | None = None
-        k: dict[str, Any] | None = None
-
-        def test_func(*args: Any, **kwargs: Any) -> None:
-            nonlocal a, k
-            a = args
-            k = kwargs
+        def test_func(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            return args, kwargs
 
         with self.with_loop() as loop:
             fut = loop.from_thread(test_func, 1, 2, 3, a="b", c="d")
             yield
-            fut.result(timeout=0.5)
-            assert a == (1, 2, 3)
-            assert k == {"a": "b", "c": "d"}
+            args, kwargs = fut.result(timeout=0.5)
+            assert args == (1, 2, 3)
+            assert kwargs == {"a": "b", "c": "d"}
 
     @make_async
     def test_to_thread_spawns_a_new_thread(self) -> Iterator[None]:
@@ -144,40 +152,49 @@ class AdapterTest:
 
     @make_async
     def test_to_thread_forwards_correctly(self) -> Iterator[None]:
-        a: tuple[Any, ...] | None = None
-        k: dict[str, Any] | None = None
-
-        def test_func(*args: Any, **kwargs: Any) -> None:
-            nonlocal a, k
-            a = args
-            k = kwargs
+        def test_func(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            return args, kwargs
 
         with self.with_loop() as loop:
-            yield from self.resolve_to_thread_future(loop.to_thread(test_func, 1, 2, 3, a="b", c="d"))
-            assert a == (1, 2, 3)
-            assert k == {"a": "b", "c": "d"}
+            args, kwargs = yield from self.resolve_to_thread_future(loop.to_thread(test_func, 1, 2, 3, a="b", c="d"))
+            assert args == (1, 2, 3)
+            assert kwargs == {"a": "b", "c": "d"}
 
 
 class AsyncAdapterTest(AdapterTest):
     """Base class for async event loop adapter tests."""
 
-    def run_within_loop(self, func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        async def wrapped(_: Any) -> None:
+    def run_within_loop[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Any],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
+        async def wrapped(self: Self) -> None:
             result = func(self, *args, **kwargs)
-            if hasattr(result, "__iter__"):
+            if isgenerator(result):
                 for _ in result:
                     await self.next_cycle()
 
-        self.run_within_loop_async(wrapped, (), {})
+        return self.run_within_loop_async(wrapped)
 
-    def run_within_loop_async(self, func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    def run_within_loop_async[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Awaitable[Any]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
         raise NotImplementedError
 
-    async def wait_for(self, coro: Any, timeout: float) -> Any:
+    async def wait_for[T](self, coro: Awaitable[T], timeout: float) -> T:
         raise NotImplementedError
 
-    async def next_cycle(self) -> None:
-        pass
+    async def next_cycle(self) -> None: ...
+
+    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
+        while not fut.done():
+            yield
+        return fut.result()
 
     @is_async
     async def test_await_future_success(self) -> None:
@@ -209,20 +226,25 @@ class TestNoLoop(AdapterTest):
     def make_loop(self) -> EventLoop:
         return _NoEventLoop()
 
-    def run_within_loop(self, func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    def run_within_loop[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Any],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
         result = func(self, *args, **kwargs)
-        if hasattr(result, "__iter__"):
+        if isgenerator(result):
             for _ in result:
-                pass
+                ...
 
     @contextlib.contextmanager
     def assert_cancelled(self) -> Generator[None]:
         with pytest.raises(CancelledError):
             yield
 
-    def resolve_to_thread_future(self, fut: Future[Any]) -> Generator[None, None, Any]:
+    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
+        yield
         return fut.result(timeout=0.5)
-        yield  # type: ignore[unreachable]
 
 
 class TestAsyncIO(AsyncAdapterTest):
@@ -231,7 +253,12 @@ class TestAsyncIO(AsyncAdapterTest):
     def make_loop(self) -> AsyncIOLoop:
         return AsyncIOLoop()
 
-    def run_within_loop_async(self, func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    def run_within_loop_async[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Awaitable[Any]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
         async def wrapped() -> None:
             await func(self, *args, **kwargs)
 
@@ -240,7 +267,7 @@ class TestAsyncIO(AsyncAdapterTest):
     async def next_cycle(self) -> None:
         await asyncio.sleep(0.01)
 
-    async def wait_for(self, coro: Any, timeout: float) -> Any:
+    async def wait_for[T](self, coro: Awaitable[T], timeout: float) -> T:
         return await asyncio.wait_for(coro, timeout)
 
     @contextlib.contextmanager
@@ -248,67 +275,36 @@ class TestAsyncIO(AsyncAdapterTest):
         with pytest.raises(asyncio.CancelledError):
             yield
 
-    def resolve_to_thread_future(self, fut: Any) -> Generator[None, None, Any]:
-        while not fut.done():
+
+class TestTrio(AsyncAdapterTest):
+    """Tests for the trio event loop adapter."""
+
+    nursery: trio.Nursery
+
+    def make_loop(self) -> TrioEventLoop:
+        return TrioEventLoop(self.nursery)
+
+    async def next_cycle(self) -> None:
+        await trio.sleep(0.01)
+
+    def run_within_loop_async[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Awaitable[Any]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
+        async def wrapped() -> None:
+            async with trio.open_nursery() as nursery:
+                self.nursery = nursery
+                await func(self, *args, **kwargs)
+
+        trio.run(wrapped)
+
+    async def wait_for[T](self, coro: Awaitable[T], timeout: float) -> T:
+        with trio.fail_after(timeout):
+            return await coro
+
+    @contextlib.contextmanager
+    def assert_cancelled(self) -> Generator[None]:
+        with pytest.raises(trio.Cancelled):
             yield
-        return fut.result()
-
-
-try:
-    import trio
-except ImportError:
-    print("Skipping trio tests")
-else:
-    from vsengine.adapters.trio import TrioEventLoop
-
-    class TestTrio(AsyncAdapterTest):
-        """Tests for the trio event loop adapter."""
-
-        nursery: trio.Nursery
-
-        def make_loop(self) -> TrioEventLoop:
-            return TrioEventLoop(self.nursery)
-
-        async def next_cycle(self) -> None:
-            await trio.sleep(0.01)
-
-        def run_within_loop_async(self, func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-            async def wrapped() -> None:
-                async with trio.open_nursery() as nursery:
-                    self.nursery = nursery
-                    await func(self, *args, **kwargs)
-
-            trio.run(wrapped)
-
-        def resolve_to_thread_future(self, fut: Any) -> Generator[None, None, Any]:
-            done = False
-            result: Any = None
-            error: BaseException | None = None
-
-            async def _awaiter() -> None:
-                nonlocal done, error, result
-                try:
-                    result = await make_awaitable(fut)
-                except BaseException as e:
-                    error = e
-                finally:
-                    done = True
-
-            self.nursery.start_soon(_awaiter)
-
-            while not done:
-                yield
-
-            if error is not None:
-                raise error
-            else:
-                return result
-
-        async def wait_for(self, coro: Any, timeout: float) -> Any:
-            with trio.fail_after(timeout):
-                return await coro
-
-        @contextlib.contextmanager
-        def assert_cancelled(self) -> Generator[None]:
-            with pytest.raises(trio.Cancelled):
-                yield
