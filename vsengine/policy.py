@@ -30,6 +30,7 @@ from vapoursynth import (
     VideoOutputTuple,
     core,
     get_outputs,
+    has_policy,
     register_policy,
 )
 
@@ -370,7 +371,7 @@ class Policy(AbstractContextManager["Policy"]):
         """
         Checks if the policy is registered with VapourSynth.
         """
-        return hasattr(self._managed, "_api")
+        return hasattr(self._managed, "_api") and has_policy()
 
     def register(self) -> None:
         """
