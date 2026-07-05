@@ -83,6 +83,37 @@ def test_stage_info(vpy_stage: str) -> None:
     print(f"Running in: {vpy_stage}")  # "initial-core" or "reloaded-core"
 ```
 
+### `vpy_policy`
+
+Returns the active environment Policy instance managed by the session.
+
+```python
+from vsengine.policy import Policy
+
+@pytest.mark.vpy
+def test_policy_info(vpy_policy: Policy) -> None:
+    assert vpy_policy.is_registered
+```
+
+### `vpy_env_factory`
+
+A factory function (`Callable[[], ManagedEnvironment]`) used to create fresh, isolated ManagedEnvironment instances.
+Any environments created by this factory are automatically tracked and disposed of at the end of the test to prevent leaks.
+
+This is particularly useful when testing lifecycle events or when running in the `no-core` stage.
+
+```python
+from collections.abc import Callable
+from vsengine.policy import ManagedEnvironment
+
+@pytest.mark.vpy("no-core")
+def test_manual_creation(vpy_env_factory: Callable[[], ManagedEnvironment]) -> None:
+    env = vpy_env_factory()
+    with env.use():
+        # Environment is now active
+        ...
+```
+
 ## Session Lifecycle
 
 1. **Session start** — A `Policy` is created and registered with VapourSynth.

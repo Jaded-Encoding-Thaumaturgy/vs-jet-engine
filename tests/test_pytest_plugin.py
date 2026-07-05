@@ -3,9 +3,12 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 
+from __future__ import annotations
+
 import importlib
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import pytest
@@ -14,17 +17,226 @@ import vapoursynth
 import vsengine._hospice as hospice
 import vsengine.pytest as vpy_pytest
 from tests._testutils import forcefully_unregister_policy
-from vsengine.policy import GlobalStore, Policy
+from vsengine.policy import GlobalStore, ManagedEnvironment, Policy
 
 pytest_plugins = ["pytester"]
 
 
+# Shadow to avoid conflicts with other potential uses of Policy in the codebase.
 @pytest.fixture(autouse=True)
 def clean_policy() -> None: ...
 
 
 @pytest.fixture(autouse=True)
 def reset_hospice_state() -> None: ...
+
+
+@pytest.fixture
+def restore_pytest_globals(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    session = request.session
+    orig_policy = session.stash.get(vpy_pytest.policy_key, None)
+    orig_env = session.stash.get(vpy_pytest.env_key, None)
+    orig_stage = session.stash.get(vpy_pytest.stage_key, "no-core")
+    yield
+    session.stash[vpy_pytest.policy_key] = orig_policy
+    session.stash[vpy_pytest.env_key] = orig_env
+    session.stash[vpy_pytest.stage_key] = orig_stage
+
+
+# All mock objects
+class MockConfig:
+    def __init__(self, collectonly: bool = False) -> None:
+        self.added_lines = list[tuple[str, str]]()
+        self.option = MockOption(collectonly)
+
+    def addinivalue_line(self, name: str, value: str) -> None:
+        self.added_lines.append((name, value))
+
+
+class MockOption:
+    def __init__(self, collectonly: bool) -> None:
+        self.collectonly = collectonly
+
+
+class MockSession:
+    def __init__(self) -> None:
+        self.stash = pytest.Stash()
+
+
+class MockCallspec:
+    def __init__(self, params: dict[str, Any]) -> None:
+        self.params = params
+
+
+class MockMarker:
+    def __init__(self, args: tuple[Any, ...] = ()) -> None:
+        self.args = args
+
+
+class MockDefinition:
+    def __init__(self, marker: MockMarker | None) -> None:
+        self.marker = marker
+
+    def get_closest_marker(self, name: str) -> MockMarker | None:
+        return self.marker
+
+
+class MockMetafunc:
+    def __init__(self, marker: MockMarker | None) -> None:
+        self.definition = MockDefinition(marker)
+        self.fixturenames = list[str]()
+        self.parametrized = list[tuple[str, list[Any], Any]]()
+
+    def parametrize(self, name: str, stages: list[Any], ids: Any) -> None:
+        self.parametrized.append((name, stages, ids))
+
+
+class MockItem:
+    def __init__(
+        self,
+        session: pytest.Session | None = None,
+        callspec: MockCallspec | None = None,
+        has_marker: bool = False,
+        path: Path | None = None,
+        parent: Any = None,
+        leaked: bool = False,
+    ) -> None:
+        self.session = session
+        if callspec is not None:
+            self.callspec = callspec
+        self.has_marker = has_marker
+        self.path = path or Path("test.py")
+        self.parent = parent
+        self.stash = pytest.Stash()
+        if leaked:
+            self.stash[vpy_pytest.leaked_key] = True
+
+    def get_closest_marker(self, name: str) -> MockMarker | None:
+        return MockMarker() if name == "vpy" and self.has_marker else None
+
+
+class MockReport:
+    def __init__(self, when: str) -> None:
+        self.when = when
+        self.longrepr = "original longrepr"
+
+
+class DummyOutcome:
+    def __init__(self, report: MockReport | None = None) -> None:
+        self.report = report
+        self.excinfo: tuple[type[BaseException], BaseException, TracebackType | None] | None = None
+        self.forced_exception: Exception | None = None
+
+    def force_exception(self, exc: Exception) -> None:
+        self.forced_exception = exc
+
+    def get_result(self) -> MockReport:
+        if self.report:
+            return self.report
+        raise AssertionError
+
+
+class MockTerminalWriter:
+    def __init__(self) -> None:
+        self.lines = list[tuple[str, dict[str, Any]]]()
+
+    def line(self, text: str, **kwargs: Any) -> None:
+        self.lines.append((text, kwargs))
+
+
+class MockEnv:
+    def __init__(self) -> None:
+        self.disposed = False
+        self.used = False
+
+    def dispose(self) -> None:
+        self.disposed = True
+
+    def use(self) -> MockContext:
+        return MockContext(self)
+
+
+class MockContext:
+    def __init__(self, env: MockEnv) -> None:
+        self.status = "init"
+        self.env = env
+
+    def __enter__(self) -> None:
+        self.status = "entered"
+        self.env.used = True
+
+    def __exit__(self, *args: object) -> None:
+        self.status = "exited"
+
+
+class MockPolicy:
+    def __init__(self, registered: bool = True) -> None:
+        self.registered = registered
+        self.unregistered = False
+        self.new_envs = list[MockEnv]()
+
+        class MockManaged: ...
+
+        self._managed = MockManaged()
+
+    @property
+    def is_registered(self) -> bool:
+        return self.registered
+
+    def new_environment(self) -> MockEnv:
+        env = MockEnv()
+        self.new_envs.append(env)
+        return env
+
+    def register(self) -> None:
+        self.registered = True
+
+    def unregister(self) -> None:
+        self.unregistered = True
+
+
+@pytest.mark.vpy
+def test_vpy_policy_fixture(vpy_policy: Policy, request: pytest.FixtureRequest) -> None:
+    assert vpy_policy is request.session.stash[vpy_pytest.policy_key]
+
+
+@pytest.mark.vpy("no-core")
+def test_vpy_env_factory_fixture(vpy_env_factory: Callable[[], ManagedEnvironment]) -> None:
+    env = vpy_env_factory()
+    assert not env.disposed
+    # The fixture will automatically dispose of it, but we can verify it works with manual disposal as well.
+    env.dispose()
+    assert env.disposed
+
+
+def test_vpy_policy_no_policy() -> None:
+    with pytest.raises(RuntimeError, match="No environment policy registered"):
+        vpy_pytest._vpy_policy_impl()
+
+
+def test_vpy_env_factory_no_policy() -> None:
+    generator = vpy_pytest._vpy_env_factory_impl()
+
+    factory = next(generator)
+    with pytest.raises(RuntimeError, match="No environment policy registered"):
+        factory()
+
+
+def test_vpy_env_factory_automatic_disposal(restore_pytest_globals: None) -> None:
+    session = MockSession()
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+
+    generator = vpy_pytest._vpy_env_factory_impl(session)  # type: ignore[arg-type]
+    factory = next(generator)
+
+    env = factory()
+    assert not env.disposed
+
+    with pytest.raises(StopIteration):
+        next(generator)
+
+    assert env.disposed
 
 
 @pytest.mark.vpy
@@ -61,35 +273,22 @@ class TestVpyInClass:
         assert vapoursynth.get_current_environment() is not None
 
 
-@pytest.fixture
-def restore_pytest_globals() -> Generator[None, None, None]:
-    orig_policy = vpy_pytest.current_policy
-    orig_env = vpy_pytest.current_env
-    orig_stage = vpy_pytest.current_stage
-    yield
-    vpy_pytest.current_policy = orig_policy
-    vpy_pytest.current_env = orig_env
-    vpy_pytest.current_stage = orig_stage
-
-
 def test_pytest_configure() -> None:
-    class MockConfig:
-        def __init__(self) -> None:
-            self.added_lines: list[tuple[str, str]] = []
-
-        def addinivalue_line(self, name: str, value: str) -> None:
-            self.added_lines.append((name, value))
-
-    config: Any = MockConfig()
-    vpy_pytest.pytest_configure(config)
+    config = MockConfig()
+    vpy_pytest.pytest_configure(config)  # type: ignore[arg-type]
     assert len(config.added_lines) == 1
     assert config.added_lines[0][0] == "markers"
     assert "vpy" in config.added_lines[0][1]
 
 
 @pytest.mark.vpy
-def test_vpy_stage_fixture(vpy_stage: str) -> None:
+def test_vpy_stage_fixture(vpy_stage: str, request: pytest.FixtureRequest) -> None:
     assert vpy_stage in vpy_pytest.DEFAULT_STAGES
+    assert vpy_stage == request.session.stash[vpy_pytest.stage_key]
+
+
+def test_vpy_stage_fixture_direct(vpy_stage: str, request: pytest.FixtureRequest) -> None:
+    assert vpy_stage == request.session.stash.get(vpy_pytest.stage_key, "no-core")
 
 
 def test_pytest_session_hooks(restore_pytest_globals: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,73 +306,35 @@ def test_pytest_session_hooks(restore_pytest_globals: None, monkeypatch: pytest.
 
     monkeypatch.setattr(Policy, "register", mock_register)
     monkeypatch.setattr(Policy, "unregister", mock_unregister)
+    monkeypatch.setattr(vapoursynth, "has_policy", lambda: False)
 
-    class MockSession: ...
+    monkeypatch.setattr(Policy, "new_environment", lambda self: MockEnv())
 
-    session: Any = MockSession()
-    vpy_pytest.pytest_sessionstart(session)
-    assert vpy_pytest.current_policy is not None
+    session = MockSession()
+    vpy_pytest.pytest_sessionstart(session)  # type: ignore[arg-type]
+    assert session.stash.get(vpy_pytest.policy_key, None) is not None
     assert registered
 
-    class MockEnv:
-        def __init__(self) -> None:
-            self.disposed = False
-
-        def dispose(self) -> None:
-            self.disposed = True
-
     mock_env = MockEnv()
-    vpy_pytest.current_env = mock_env  # type: ignore[assignment]
+    session.stash[vpy_pytest.env_key] = mock_env  # type: ignore[misc]
 
-    class MockManaged: ...
-
-    class MockPolicyForFinish:
-        def __init__(self) -> None:
-            self._managed = MockManaged()
-            self.registered = False
-            self.unregistered = False
-
-        @property
-        def is_registered(self) -> bool:
-            return self.registered
-
-        def register(self) -> None:
-            self.registered = True
-
-        def unregister(self) -> None:
-            self.unregistered = True
-
-    mock_policy = MockPolicyForFinish()
-    vpy_pytest.current_policy = mock_policy  # type: ignore[assignment]
-    vpy_pytest.pytest_sessionfinish(session, 0)
-    assert vpy_pytest.current_policy is None
-    assert vpy_pytest.current_env is None  # type: ignore[unreachable]
+    mock_policy = MockPolicy(registered=False)
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+    vpy_pytest.pytest_sessionfinish(session, 0)  # type: ignore[arg-type]
+    assert session.stash.get(vpy_pytest.policy_key, None) is None
+    assert session.stash.get(vpy_pytest.env_key, None) is None
     assert mock_env.disposed
     assert mock_policy.registered
     assert mock_policy.unregistered
 
 
+def test_pytest_sessionfinish_no_policy(restore_pytest_globals: None) -> None:
+    session = MockSession()
+    session.stash[vpy_pytest.policy_key] = None
+    vpy_pytest.pytest_sessionfinish(session, 0)  # type: ignore[arg-type]
+
+
 def test_pytest_generate_tests() -> None:
-    class MockMarker:
-        def __init__(self, args: tuple[Any, ...]) -> None:
-            self.args = args
-
-    class MockDefinition:
-        def __init__(self, marker: MockMarker | None) -> None:
-            self.marker = marker
-
-        def get_closest_marker(self, name: str) -> MockMarker | None:
-            return self.marker
-
-    class MockMetafunc:
-        def __init__(self, marker: MockMarker | None) -> None:
-            self.definition = MockDefinition(marker)
-            self.fixturenames: list[str] = []
-            self.parametrized: list[tuple[str, list[Any], Any]] = []
-
-        def parametrize(self, name: str, stages: list[Any], ids: Any) -> None:
-            self.parametrized.append((name, stages, ids))
-
     # Case 1: no marker
     meta1 = MockMetafunc(None)
     vpy_pytest.pytest_generate_tests(meta1)  # type: ignore[arg-type]
@@ -195,42 +356,21 @@ def test_pytest_generate_tests() -> None:
 
 
 def test_pytest_collection_modifyitems(request: pytest.FixtureRequest) -> None:
-    class MockOption:
-        def __init__(self, collectonly: bool) -> None:
-            self.collectonly = collectonly
-
-    class MockConfig:
-        def __init__(self, collectonly: bool) -> None:
-            self.option = MockOption(collectonly)
-
-    class MockCallspec:
-        def __init__(self, params: dict[str, Any]) -> None:
-            self.params = params
-
-    class MockItem:
-        def __init__(self, path: Path, callspec: MockCallspec | None = None, parent: Any = None) -> None:
-            self.path = path
-            if callspec is not None:
-                self.callspec = callspec
-            self.parent = parent
-
     # Case 1: collectonly is True
     config_collect = MockConfig(collectonly=True)
-    items1 = [MockItem(Path("test.py"))]
+    items1 = [MockItem(path=Path("test.py"))]
     vpy_pytest.pytest_collection_modifyitems(request.session, config_collect, items1)  # type: ignore[arg-type]
     assert len(items1) == 1
 
     # Case 2: collectonly is False, with some vpy items, other items, and invalid stage item (line 101)
-    config_run: Any = MockConfig(collectonly=False)
+    config_run = MockConfig(collectonly=False)
     p = Path("test.py")
-    item_vpy_initial = MockItem(p, MockCallspec({"vpy_stage": "initial-core"}), parent=request.node)
-    item_vpy_reloaded = MockItem(p, MockCallspec({"vpy_stage": "reloaded-core"}), parent=request.node)
-    item_vpy_invalid = MockItem(
-        p, MockCallspec({"vpy_stage": "invalid-stage"}), parent=request.node
-    )  # Line 101 target
-    item_other = MockItem(p)
+    item_vpy_initial = MockItem(path=p, callspec=MockCallspec({"vpy_stage": "initial-core"}), parent=request.node)  # pyright: ignore[reportArgumentType]
+    item_vpy_reloaded = MockItem(path=p, callspec=MockCallspec({"vpy_stage": "reloaded-core"}), parent=request.node)  # pyright: ignore[reportArgumentType]
+    item_vpy_invalid = MockItem(path=p, callspec=MockCallspec({"vpy_stage": "invalid-stage"}), parent=request.node)  # pyright: ignore[reportArgumentType] # Line 101 target
+    item_other = MockItem(path=p)
 
-    items2 = [item_vpy_initial, item_vpy_reloaded, item_vpy_invalid, item_other]
+    items2: list[Any] = [item_vpy_initial, item_vpy_reloaded, item_vpy_invalid, item_other]
     vpy_pytest.pytest_collection_modifyitems(request.session, config_run, items2)  # type: ignore[arg-type]
 
     # Verify modification
@@ -245,147 +385,219 @@ def test_pytest_collection_modifyitems(request: pytest.FixtureRequest) -> None:
     assert items2[5] is item_other
 
 
-def test_pytest_runtest_call(restore_pytest_globals: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    class MockCallspec:
-        def __init__(self, params: dict[str, Any]) -> None:
-            self.params = params
+def test_pytest_collection_modifyitems_cleanup(restore_pytest_globals: None) -> None:
+    config_run = MockConfig(collectonly=False)
+    session = MockSession()
 
-    class MockItem:
-        def __init__(self, callspec: MockCallspec | None = None) -> None:
-            if callspec is not None:
-                self.callspec = callspec
-            self._vpy_leaked = False
+    mock_env = MockEnv()
+    mock_ctx = MockContext(mock_env)
 
-    class MockEnv:
-        def __init__(self) -> None:
-            self.disposed = False
-            self.used = False
+    session.stash[vpy_pytest.env_key] = mock_env  # type: ignore[misc]
+    session.stash[vpy_pytest.env_ctx_key] = mock_ctx
 
-        def dispose(self) -> None:
-            self.disposed = True
+    items = [MockItem(path=Path("test.py"))]
+    vpy_pytest.pytest_collection_modifyitems(session, config_run, items)  # type: ignore[arg-type]
 
-        def use(self) -> Any:
-            env = self
+    assert mock_ctx.status == "exited"
+    assert mock_env.disposed
+    assert session.stash.get(vpy_pytest.env_key, None) is None
+    assert session.stash.get(vpy_pytest.env_ctx_key, None) is None
 
-            class Context:
-                def __enter__(self) -> None:
-                    env.used = True
 
-                def __exit__(self, *args: object) -> None: ...
+def test_pytest_collection_modifyitems_no_vpy_items(restore_pytest_globals: None) -> None:
+    config_run = MockConfig(collectonly=False)
+    session = MockSession()
+    mock_policy = MockPolicy(registered=True)
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
 
-            return Context()
+    items = [MockItem(path=Path("test.py"), has_marker=False)]
+    vpy_pytest.pytest_collection_modifyitems(session, config_run, items)  # type: ignore[arg-type]
 
-    class MockPolicy:
-        def __init__(self) -> None:
-            self.new_envs: list[MockEnv] = []
+    assert mock_policy.unregistered
+    assert session.stash.get(vpy_pytest.policy_key, None) is None
 
-            class MockManaged: ...
 
-            self._managed = MockManaged()
+def test_pytest_runtest_protocol_no_callspec(restore_pytest_globals: None, request: pytest.FixtureRequest) -> None:
+    session = request.session
+    item = MockItem(session, None)
+    gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+    assert next(gen, None) is None
 
-        @property
-        def is_registered(self) -> bool:
-            return False
 
-        def new_environment(self) -> Any:
-            env = MockEnv()
-            self.new_envs.append(env)
-            return env
+def test_pytest_runtest_protocol_policy_none_in_stash(
+    restore_pytest_globals: None,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    session = request.session
+    monkeypatch.setattr(Policy, "register", lambda self: None)
+    monkeypatch.setattr(Policy, "new_environment", lambda self: MockEnv())
 
-        def register(self) -> None: ...
+    session.stash[vpy_pytest.policy_key] = None
+    item = MockItem(session, MockCallspec({"vpy_stage": "initial-core"}))
+    gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+    next(gen)
+    outcome = DummyOutcome()
+    with pytest.raises(StopIteration):
+        gen.send(outcome)  # type: ignore[arg-type]
+    assert session.stash[vpy_pytest.policy_key] is not None
 
-    # Case 1: no callspec
-    item1 = MockItem(None)
-    gen1 = vpy_pytest.pytest_runtest_call(item1)  # type: ignore[arg-type]
-    assert next(gen1, None) is None
 
-    # Case 2: stage != current_stage (initial-core)
+def test_pytest_runtest_protocol_unparameterized_leak(
+    restore_pytest_globals: None, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
     mock_policy = MockPolicy()
-    vpy_pytest.current_policy = mock_policy  # type: ignore[assignment]
-    vpy_pytest.current_stage = "no-core"
-
-    item2 = MockItem(MockCallspec({"vpy_stage": "initial-core"}))
-    gen2 = vpy_pytest.pytest_runtest_call(item2)  # type: ignore[arg-type]
-
-    class DummyOutcome:
-        def __init__(self) -> None:
-            self.excinfo = None
-            self.forced_exception = None
-
-        def force_exception(self, exc: Any) -> None:
-            self.forced_exception = exc
-
-    next(gen2)
-    outcome2 = DummyOutcome()
-    with pytest.raises(StopIteration):
-        gen2.send(outcome2)  # type: ignore[arg-type]
-
-    assert len(mock_policy.new_envs) == 1
-    current_env_any = vpy_pytest.current_env
-    assert current_env_any is mock_policy.new_envs[0]  # type: ignore[comparison-overlap]
-    assert vpy_pytest.current_stage == "initial-core"  # type: ignore[unreachable]
-
-    # Case 3: stage != current_stage (reloaded-core) with current_env not None (covers line 152)
-    item3 = MockItem(MockCallspec({"vpy_stage": "reloaded-core"}))
-    gen3 = vpy_pytest.pytest_runtest_call(item3)  # pyright: ignore[reportArgumentType]
-    next(gen3)
-    outcome3 = DummyOutcome()
-    with pytest.raises(StopIteration):
-        gen3.send(outcome3)  # pyright: ignore[reportArgumentType]
-
-    assert len(mock_policy.new_envs) == 2
-    assert mock_policy.new_envs[0].disposed
-    current_env_any = vpy_pytest.current_env
-    assert current_env_any is mock_policy.new_envs[1]
-    assert vpy_pytest.current_stage == "reloaded-core"
-
-    # Case 4: stage is unique-core (covers line 161-177)
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
     orig_any_alive = hospice.any_alive
     orig_freeze = hospice.freeze
     try:
         hospice.any_alive = lambda: True
         hospice.freeze = lambda: None
 
-        item4a = MockItem(MockCallspec({"vpy_stage": "unique-core"}))
-        gen4a = vpy_pytest.pytest_runtest_call(item4a)  # pyright: ignore[reportArgumentType]
+        item = MockItem(session, None, has_marker=True)
+        gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+        next(gen)
+        outcome = DummyOutcome()
+        with pytest.raises(StopIteration):
+            gen.send(outcome)  # type: ignore[arg-type]
+
+        assert item.stash.get(vpy_pytest.leaked_key, False) is True
+        assert isinstance(outcome.forced_exception, AssertionError)
+        assert "Expected all environments to be cleaned up" in str(outcome.forced_exception)
+    finally:
+        hospice.any_alive = orig_any_alive
+        hospice.freeze = orig_freeze
+
+
+def test_pytest_runtest_protocol_stage_change_initial_core(
+    restore_pytest_globals: None, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+    session.stash[vpy_pytest.stage_key] = "no-core"
+
+    item = MockItem(session, MockCallspec({"vpy_stage": "initial-core"}))
+    gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+
+    next(gen)
+    outcome = DummyOutcome()
+    with pytest.raises(StopIteration):
+        gen.send(outcome)  # type: ignore[arg-type]
+
+    assert len(mock_policy.new_envs) == 1
+    current_env_any = session.stash[vpy_pytest.env_key]
+    assert current_env_any is mock_policy.new_envs[0]  # type: ignore[comparison-overlap]
+    assert session.stash[vpy_pytest.stage_key] == "initial-core"  # type: ignore[unreachable]
+
+
+def test_pytest_runtest_protocol_stage_initial_core_env_none(
+    restore_pytest_globals: None, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+    session.stash[vpy_pytest.stage_key] = "initial-core"
+    session.stash[vpy_pytest.env_key] = None
+
+    item = MockItem(session, MockCallspec({"vpy_stage": "initial-core"}))
+    gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+    next(gen)
+    outcome = DummyOutcome()
+    with pytest.raises(StopIteration):
+        gen.send(outcome)  # type: ignore[arg-type]
+    assert len(mock_policy.new_envs) == 1
+    current_env_any = session.stash[vpy_pytest.env_key]
+    assert current_env_any is mock_policy.new_envs[0]  # type: ignore[comparison-overlap]
+    assert session.stash[vpy_pytest.stage_key] == "initial-core"  # type: ignore[unreachable]
+
+
+def test_pytest_runtest_protocol_stage_reloaded_core(
+    restore_pytest_globals: None, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+    mock_env = mock_policy.new_environment()
+    session.stash[vpy_pytest.env_key] = mock_env  # type: ignore[misc]
+    session.stash[vpy_pytest.stage_key] = "initial-core"
+
+    item = MockItem(session, MockCallspec({"vpy_stage": "reloaded-core"}))
+    gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+    next(gen)
+    outcome = DummyOutcome()
+    with pytest.raises(StopIteration):
+        gen.send(outcome)  # type: ignore[arg-type]
+
+    assert len(mock_policy.new_envs) == 2
+    assert mock_env.disposed
+    current_env_any = session.stash[vpy_pytest.env_key]
+    assert current_env_any is mock_policy.new_envs[1]  # type: ignore[comparison-overlap]
+    assert session.stash[vpy_pytest.stage_key] == "reloaded-core"  # type: ignore[unreachable]
+
+
+def test_pytest_runtest_protocol_stage_no_core_env_not_none(
+    restore_pytest_globals: None, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+    session.stash[vpy_pytest.stage_key] = "no-core"
+    mock_env = mock_policy.new_environment()
+    session.stash[vpy_pytest.env_key] = mock_env  # type: ignore[misc]
+
+    item = MockItem(session, MockCallspec({"vpy_stage": "no-core"}))
+    gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
+    next(gen)
+    outcome = DummyOutcome()
+    with pytest.raises(StopIteration):
+        gen.send(outcome)  # type: ignore[arg-type]
+    assert mock_env.disposed
+    assert session.stash[vpy_pytest.env_key] is None
+    assert session.stash[vpy_pytest.stage_key] == "no-core"
+
+
+def test_pytest_runtest_protocol_stage_unique_core(
+    restore_pytest_globals: None, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+
+    orig_any_alive = hospice.any_alive
+    orig_freeze = hospice.freeze
+    try:
+        hospice.any_alive = lambda: True
+        hospice.freeze = lambda: None
+
+        item4a = MockItem(session, MockCallspec({"vpy_stage": "unique-core"}))
+        gen4a = vpy_pytest.pytest_runtest_protocol(item4a, None)  # type: ignore[arg-type]
         next(gen4a)
 
         outcome4a = DummyOutcome()
         with pytest.raises(StopIteration):
-            gen4a.send(outcome4a)  # pyright: ignore[reportArgumentType]
+            gen4a.send(outcome4a)  # type: ignore[arg-type]
 
-        assert item4a._vpy_leaked is True
+        assert item4a.stash.get(vpy_pytest.leaked_key, False) is True
         assert isinstance(outcome4a.forced_exception, AssertionError)
         assert "Expected all environments to be cleaned up" in str(outcome4a.forced_exception)
 
-        item4b = MockItem(MockCallspec({"vpy_stage": "unique-core"}))
-        gen4b = vpy_pytest.pytest_runtest_call(item4b)  # pyright: ignore[reportArgumentType]
+        item4b = MockItem(session, MockCallspec({"vpy_stage": "unique-core"}))
+        gen4b = vpy_pytest.pytest_runtest_protocol(item4b, None)  # type: ignore[arg-type]
         next(gen4b)
 
         outcome4b = DummyOutcome()
         outcome4b.excinfo = (AssertionError, AssertionError("Original test failure"), None)  # pyright: ignore[reportAttributeAccessIssue]
         with pytest.raises(StopIteration):
-            gen4b.send(outcome4b)  # pyright: ignore[reportArgumentType]
+            gen4b.send(outcome4b)  # type: ignore[arg-type]
 
-        assert item4b._vpy_leaked is True
+        assert item4b.stash.get(vpy_pytest.leaked_key, False) is True
         assert outcome4b.forced_exception is None
 
     finally:
         hospice.any_alive = orig_any_alive
         hospice.freeze = orig_freeze
-
-    # Case 5: current_policy is None (covers line 142)
-    monkeypatch.setattr(Policy, "register", lambda self: None)
-    monkeypatch.setattr(Policy, "new_environment", lambda self: MockEnv())
-
-    vpy_pytest.current_policy = None
-    item5 = MockItem(MockCallspec({"vpy_stage": "initial-core"}))
-    gen5 = vpy_pytest.pytest_runtest_call(item5)  # pyright: ignore[reportArgumentType]
-    next(gen5)
-    outcome5 = DummyOutcome()
-    with pytest.raises(StopIteration):
-        gen5.send(outcome5)  # pyright: ignore[reportArgumentType]
-    assert vpy_pytest.current_policy is not None
 
 
 def test_pytest_module_reload(restore_pytest_globals: None) -> None:
@@ -393,22 +605,6 @@ def test_pytest_module_reload(restore_pytest_globals: None) -> None:
 
 
 def test_pytest_runtest_makereport() -> None:
-    class MockItem:
-        def __init__(self, leaked: bool) -> None:
-            self._vpy_leaked = leaked
-
-    class MockReport:
-        def __init__(self, when: str) -> None:
-            self.when = when
-            self.longrepr = "original longrepr"
-
-    class DummyOutcome:
-        def __init__(self, report: MockReport) -> None:
-            self.report = report
-
-        def get_result(self) -> MockReport:
-            return self.report
-
     # Case 1: not when == 'call'
     item1 = MockItem(leaked=True)
     report1 = MockReport(when="setup")
@@ -452,13 +648,6 @@ def test_cleanup_failed() -> None:
     assert str(vpy_pytest.CleanupFailed("prev", "next")) == "prev\n\nnext"
 
     # Test toterminal
-    class MockTerminalWriter:
-        def __init__(self) -> None:
-            self.lines: list[tuple[str, dict[str, Any]]] = []
-
-        def line(self, text: str, **kwargs: Any) -> None:
-            self.lines.append((text, kwargs))
-
     # Case A: previous is None
     tw_a = MockTerminalWriter()
     cf_a = vpy_pytest.CleanupFailed(None, "line1\nline2")
@@ -486,33 +675,12 @@ def test_cleanup_failed() -> None:
 
 
 def test_ensure_clean_environment(restore_pytest_globals: None, request: pytest.FixtureRequest) -> None:
-    class MockEnv:
-        def __init__(self) -> None:
-            self.disposed = False
-
-        def dispose(self) -> None:
-            self.disposed = True
-
-    class MockPolicy:
-        def __init__(self) -> None:
-
-            self._managed = MockManaged()
-            self.registered = False
-
-        @property
-        def is_registered(self) -> bool:
-            return self.registered
-
-        def register(self) -> None:
-            self.registered = True
-
-    class MockManaged: ...
-
     # Setup environment
     mock_env = MockEnv()
-    mock_policy = MockPolicy()
-    vpy_pytest.current_env = mock_env  # type: ignore[assignment]
-    vpy_pytest.current_policy = mock_policy  # type: ignore[assignment]
+    mock_policy = MockPolicy(registered=False)
+    session = request.session
+    session.stash[vpy_pytest.env_key] = mock_env  # type: ignore[misc]
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
 
     ece = vpy_pytest.EnsureCleanEnvironment.from_parent(
         parent=request.node,
@@ -529,7 +697,7 @@ def test_ensure_clean_environment(restore_pytest_globals: None, request: pytest.
 
         ece.runtest()
         assert mock_env.disposed
-        assert vpy_pytest.current_env is None
+        assert session.stash.get(vpy_pytest.env_key, None) is None
         assert mock_policy.registered
 
         failure_repr = ece.repr_failure(None)  # type: ignore[arg-type]
@@ -540,7 +708,7 @@ def test_ensure_clean_environment(restore_pytest_globals: None, request: pytest.
         assert info == (Path("test_file.py"), None, "cleaning up: initial-core")
 
         hospice.any_alive = lambda: True
-        vpy_pytest.current_env = mock_env  # type: ignore[assignment] # reset env for another run
+        session.stash[vpy_pytest.env_key] = mock_env  # type: ignore[misc] # reset env for another run
         with pytest.raises(AssertionError, match="Expected all environments to be cleaned up"):
             ece.runtest()
 
@@ -549,7 +717,7 @@ def test_ensure_clean_environment(restore_pytest_globals: None, request: pytest.
         hospice.freeze = orig_freeze
 
 
-def test_plugin_integration(pytester: pytest.Pytester) -> None:
+def test_plugin_integration(pytester: pytest.Pytester, request: pytest.FixtureRequest) -> None:
     forcefully_unregister_policy()
 
     pytester.makeini(
@@ -574,5 +742,6 @@ def test_plugin_integration(pytester: pytest.Pytester) -> None:
         result = pytester.inline_run()
         result.assertoutcome(passed=4)
     finally:
-        vpy_pytest.current_policy = Policy(GlobalStore())
-        vpy_pytest.current_policy.register()
+        policy = Policy(GlobalStore())
+        policy.register()
+        request.session.stash[vpy_pytest.policy_key] = policy
