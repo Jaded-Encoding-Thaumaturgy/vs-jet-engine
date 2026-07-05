@@ -268,9 +268,17 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
 
         logger.debug("Starting disposal of environment: %r", self._data)
 
-        admit_environment(self._data, self.core)
-        self._policy.api.destroy_environment(self._data)
+        if self._policy.is_registered and self._policy.managed.is_alive(self._data):
+            logger.debug("Admitting environment to hospice")
+            admit_environment(self._data, self.core)
+            logger.debug("Destroying environment")
+            self._policy.api.destroy_environment(self._data)
+            logger.debug("Environment destroyed")
+        else:
+            logger.debug("Environment not registered or not alive, skipping disposal")
+
         del self._data
+        logger.debug("Environment disposed")
 
     @contextmanager
     def inline_section(self) -> Generator[None]:
