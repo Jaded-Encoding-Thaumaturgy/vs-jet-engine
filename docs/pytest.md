@@ -34,21 +34,22 @@ By default this runs the test **twice**: once under `initial-core` and once unde
 ```python
 @pytest.mark.vpy                             # default: initial-core + reloaded-core
 @pytest.mark.vpy("unique-core")              # only unique-core
-@pytest.mark.vpy("unique-core", "no-core")   # unique-core then no-core
+@pytest.mark.vpy("no-policy", "no-core")     # no-policy then no-core
 ```
 
 Pass one or more stage names as positional arguments to override which stages the test runs under.
 
 ## Stages
 
-| Stage           | Environment Lifecycle                                                        | Use Case                                                                          |
-| :-------------- | :--------------------------------------------------------------------------- | :-------------------------------------------------------------------------------- |
-| `initial-core`  | A shared environment created once and kept alive for all tests in the stage. | Fast tests that don't alter global state.                                         |
-| `reloaded-core` | A shared environment that is disposed and recreated before each test.        | Simulating script-reload behavior.                                                |
-| `unique-core`   | A private environment created and disposed for each individual test.         | Tests that mutate core settings, register custom plugins, or need full isolation. |
-| `no-core`       | No environment is active.                                                    | Testing error handling or manual environment initialization.                      |
+| Stage           | Environment Lifecycle                                                        | Use Case                                                                            |
+| :-------------- | :--------------------------------------------------------------------------- | :---------------------------------------------------------------------------------- |
+| `no-policy`     | No environment policy is registered.                                         | Testing custom policies, policy registration, or zero-policy environment lifecycle. |
+| `no-core`       | No environment is active.                                                    | Testing error handling or manual environment initialization.                        |
+| `initial-core`  | A shared environment created once and kept alive for all tests in the stage. | Fast tests that don't alter global state.                                           |
+| `reloaded-core` | A shared environment that is disposed and recreated before each test.        | Simulating script-reload behavior.                                                  |
+| `unique-core`   | A private environment created and disposed for each individual test.         | Tests that mutate core settings, register custom plugins, or need full isolation.   |
 
-Within a module, tests are sorted by stage in the order above (`no-core` → `initial-core` → `reloaded-core` → `unique-core`).
+Within a module, tests are sorted by stage in the order above (`no-policy` → `no-core` → `initial-core` → `reloaded-core` → `unique-core`).
 
 ## Leak Detection
 
@@ -117,5 +118,5 @@ def test_manual_creation(vpy_env_factory: Callable[[], ManagedEnvironment]) -> N
 ## Session Lifecycle
 
 1. **Session start** — A `Policy` is created and registered with VapourSynth.
-2. **Test execution** — The `pytest_runtest_call` hook sets up / tears down environments based on each test's stage.
+2. **Test execution** — The `pytest_runtest_protocol` hook sets up / tears down environments and policies based on each test's stage.
 3. **Session finish** — Any remaining environment is disposed and the policy is unregistered, restoring VapourSynth to its default state.

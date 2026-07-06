@@ -33,7 +33,7 @@ class _HasCallSpec(Protocol):
 
 
 DEFAULT_STAGES = ("initial-core", "reloaded-core")
-KNOWN_STAGES = ("no-core", "initial-core", "reloaded-core", "unique-core")
+KNOWN_STAGES = ("no-policy", "no-core", "initial-core", "reloaded-core", "unique-core")
 
 DEFAULT_ERROR_MESSAGE = (
     "Your test suite left a dangling object to a vapoursynth core.",
@@ -72,7 +72,7 @@ def pytest_configure(config: pytest.Config) -> None:
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_configure
     config.addinivalue_line(
         "markers",
-        'vpy(*stages: Literal["no-core", "initial-core", "reloaded-core", "unique-core"]): '
+        'vpy(*stages: Literal["no-policy", "no-core", "initial-core", "reloaded-core", "unique-core"]): '
         "Mark what stages should be run. (Defaults to initial-core + reloaded-core)",
     )
 
@@ -218,14 +218,22 @@ def pytest_runtest_protocol(
     if policy is None:
         item.session.stash[policy_key] = policy = Policy(GlobalStore())
 
-    if not policy.is_registered:
-        policy.register()
-        item.session.stash[env_key] = None
-
     env = item.session.stash.get(env_key, None)
     stage = item.session.stash.get(stage_key, "no-core")
 
     stage_param = str(callspec.params["vpy_stage"]) if is_vpy_stage and callspec else "no-core"
+
+    # Ensure policy registration matches the stage
+    if stage_param == "no-policy":
+        if policy.is_registered:
+            policy.unregister()
+        if env:
+            env.dispose()
+            item.session.stash[env_key] = None
+    elif not policy.is_registered:
+        policy.register()
+        # If we register the policy, make sure there is no stale env stored
+        item.session.stash[env_key] = None
 
     # Case 1: Isolated run (no stage parameter or unique-core)
     if not is_vpy_stage or stage_param == "unique-core":
@@ -244,11 +252,11 @@ def pytest_runtest_protocol(
                 outcome.force_exception(AssertionError("Expected all environments to be cleaned up."))
         return
 
-    # Case 2: Shared/Stateful run (initial-core, reloaded-core, or no-core)
+    # Case 2: Shared/Stateful run (initial-core, reloaded-core, no-core, or no-policy)
     if (
         stage_param != stage
         or (stage_param in ("initial-core", "reloaded-core") and (env is None or env.disposed))
-        or (stage_param == "no-core" and env)
+        or (stage_param in ("no-core", "no-policy") and env)
     ):
         if stage_param == "initial-core":
             if env is None or env.disposed:
@@ -257,7 +265,7 @@ def pytest_runtest_protocol(
             if env:
                 env.dispose()
             env = policy.new_environment()
-        elif stage_param == "no-core":
+        elif stage_param in ("no-core", "no-policy"):
             if env:
                 env.dispose()
             env = None
