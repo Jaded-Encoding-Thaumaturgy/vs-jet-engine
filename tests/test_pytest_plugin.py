@@ -69,7 +69,7 @@ class MockCallspec:
 
 
 class MockMarker:
-    def __init__(self, *args: Any) -> None:
+    def __init__(self, args: tuple[Any, ...]) -> None:
         self.args = args
 
 
@@ -112,7 +112,7 @@ class MockItem:
             self.stash[vpy_pytest.leaked_key] = True
 
     def get_closest_marker(self, name: str) -> MockMarker | None:
-        return MockMarker() if name == "vpy" and self.has_marker else None
+        return MockMarker(()) if name == "vpy" and self.has_marker else None
 
 
 class MockReport:
