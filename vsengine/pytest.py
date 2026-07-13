@@ -45,6 +45,7 @@ env_key = pytest.StashKey[ManagedEnvironment | None]()
 env_ctx_key = pytest.StashKey[AbstractContextManager[None] | None]()
 stage_key = pytest.StashKey[str]()
 leaked_key = pytest.StashKey[bool]()
+failed_key = pytest.StashKey[bool]()
 
 
 @pytest.fixture
@@ -245,6 +246,9 @@ def pytest_runtest_protocol(
             env_unique.dispose()
 
         failed = outcome.excinfo[1] if outcome.excinfo else None
+        if failed is None and item.stash.get(failed_key, False):
+            failed = True
+
         if hospice.any_alive():
             hospice.freeze()
             item.stash[leaked_key] = True
@@ -288,6 +292,8 @@ def pytest_runtest_makereport(
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_runtest_makereport
     outcome = yield
     report = outcome.get_result()
+    if report.failed:
+        item.stash[failed_key] = True
     if report.when == "call" and item.stash.get(leaked_key, False):
         err_message = "\n".join(DEFAULT_ERROR_MESSAGE)
         report.longrepr = CleanupFailed(report.longrepr, err_message)

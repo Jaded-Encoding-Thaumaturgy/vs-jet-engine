@@ -116,8 +116,9 @@ class MockItem:
 
 
 class MockReport:
-    def __init__(self, when: str) -> None:
+    def __init__(self, when: str, failed: bool = False) -> None:
         self.when = when
+        self.failed = failed
         self.longrepr = "original longrepr"
 
 
@@ -627,6 +628,18 @@ def test_pytest_runtest_protocol_stage_unique_core(
         assert item4b.stash.get(vpy_pytest.leaked_key, False) is True
         assert outcome4b.forced_exception is None
 
+        item4c = MockItem(session, MockCallspec(vpy_stage="unique-core"))
+        item4c.stash[vpy_pytest.failed_key] = True
+        gen4c = vpy_pytest.pytest_runtest_protocol(item4c, None)  # type: ignore[arg-type]
+        next(gen4c)
+
+        outcome4c = DummyOutcome()
+        with pytest.raises(StopIteration):
+            gen4c.send(outcome4c)  # type: ignore[arg-type]
+
+        assert item4c.stash.get(vpy_pytest.leaked_key, False) is True
+        assert outcome4c.forced_exception is None
+
     finally:
         hospice.any_alive = orig_any_alive
         hospice.freeze = orig_freeze
@@ -668,6 +681,26 @@ def test_pytest_runtest_makereport() -> None:
     longrepr_any = report3.longrepr
     assert longrepr_any.__class__.__name__ == "CleanupFailed"
     assert longrepr_any.previous == "original longrepr"  # type: ignore[attr-defined]
+
+    # Case 4: report failed, check stash[failed_key]
+    item4 = MockItem(leaked=False)
+    report4 = MockReport(when="call", failed=True)
+    gen4 = vpy_pytest.pytest_runtest_makereport(item4, None)  # type: ignore[arg-type]
+    next(gen4)
+    outcome4 = DummyOutcome(report4)
+    with pytest.raises(StopIteration):
+        gen4.send(outcome4)  # type: ignore[arg-type]
+    assert item4.stash.get(vpy_pytest.failed_key, False) is True
+
+    # Case 5: report passed, check stash[failed_key]
+    item5 = MockItem(leaked=False)
+    report5 = MockReport(when="call", failed=False)
+    gen5 = vpy_pytest.pytest_runtest_makereport(item5, None)  # type: ignore[arg-type]
+    next(gen5)
+    outcome5 = DummyOutcome(report5)
+    with pytest.raises(StopIteration):
+        gen5.send(outcome5)  # type: ignore[arg-type]
+    assert item5.stash.get(vpy_pytest.failed_key, False) is False
 
 
 def test_cleanup_failed() -> None:
