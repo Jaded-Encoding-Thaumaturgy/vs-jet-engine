@@ -337,7 +337,7 @@ class Policy(AbstractContextManager["Policy"]):
 
     _managed: _ManagedPolicy
 
-    def __init__(self, store: EnvironmentStore | None = None, flags_creation: int = 0) -> None:
+    def __init__(self, store: EnvironmentStore | None = None, flags_creation: int | None = None) -> None:
         """
         Initializes a new Policy
 
@@ -347,7 +347,7 @@ class Policy(AbstractContextManager["Policy"]):
                             See vapoursynth.CoreCreationFlags for more information.
         """
         self._managed = _ManagedPolicy(store or GlobalStore())
-        self.flags_creation = flags_creation
+        self.flags_creation = flags_creation or 0
 
     def __enter__(self) -> Self:
         self.register()
@@ -393,7 +393,7 @@ class Policy(AbstractContextManager["Policy"]):
         """
         self._managed.api.unregister_policy()
 
-    def new_environment(self) -> ManagedEnvironment:
+    def new_environment(self, flags_creation: int | None = None) -> ManagedEnvironment:
         """
         Creates a new VapourSynth core.
 
@@ -402,8 +402,15 @@ class Policy(AbstractContextManager["Policy"]):
 
         For convenience, a managed environment will also serve as a
         context-manager that disposes the environment automatically.
+
+        Args:
+            flags_creation: The flags to use when creating the environment.
+                            See vapoursynth.CoreCreationFlags for more information.
+                            Defaults to the flags used when creating this policy.
+        Returns:
+            A new ManagedEnvironment.
         """
-        data = self.api.create_environment(self.flags_creation)
+        data = self.api.create_environment(flags_creation if flags_creation is not None else self.flags_creation)
         env = self.api.wrap_environment(data)
 
         menv = ManagedEnvironment(env, data, self)
