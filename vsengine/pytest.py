@@ -69,12 +69,24 @@ def vpy_stage(request: pytest.FixtureRequest) -> str:
     return request.session.stash.get(stage_key, "no-core")
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--vpy-flags",
+        action="store",
+        type=int,
+        default=None,
+        help="Default creation flags for VapourSynth environments created by vsengine.",
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_configure
     config.addinivalue_line(
         "markers",
-        'vpy(*stages: Literal["no-policy", "no-core", "initial-core", "reloaded-core", "unique-core"]): '
-        "Mark what stages should be run. (Defaults to initial-core + reloaded-core)",
+        'vpy(*stages: Literal["no-policy", "no-core", "initial-core", "reloaded-core", "unique-core"], '
+        "flags_creation: int = ...): "
+        "Mark what stages should be run, with optional core creation flags override. "
+        "(Defaults to initial-core + reloaded-core)",
     )
 
 
@@ -85,7 +97,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     env_ctx = None
 
     if not vs.has_policy():
-        policy = Policy(GlobalStore())
+        policy = _create_default_policy(session)
         policy.register()
         env = policy.new_environment()
         env_ctx = env.use()
@@ -206,23 +218,31 @@ def pytest_runtest_protocol(
     item: pytest.Item, nextitem: pytest.Item | None
 ) -> Generator[None, pluggy.Result[Any], None]:
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_runtest_protocol
-    policy = item.session.stash.get(policy_key, None)
-
     callspec: CallSpec2 | None = getattr(item, "callspec", None)
     is_vpy_stage = callspec and "vpy_stage" in callspec.params
+    marker = item.get_closest_marker("vpy")
 
-    if not is_vpy_stage and item.get_closest_marker("vpy") is None:
+    if not is_vpy_stage and marker is None:
         yield
         return
 
     # If it is a vpy test, make sure policy is registered
-    if policy is None:
-        item.session.stash[policy_key] = policy = Policy(GlobalStore())
+    if not (policy := item.session.stash.get(policy_key, None)):
+        item.session.stash[policy_key] = policy = _create_default_policy(item.session)
 
     env = item.session.stash.get(env_key, None)
     stage = item.session.stash.get(stage_key, "no-core")
 
     stage_param = str(callspec.params["vpy_stage"]) if is_vpy_stage and callspec else "no-core"
+    flags_creation = marker.kwargs.get("flags_creation", None) if marker else None
+
+    # Check flags_creation constraints for shared and core-less stages
+    if stage_param != "unique-core" and flags_creation is not None and flags_creation != policy.flags_creation:
+        raise ValueError(
+            f"Cannot specify custom flags_creation={flags_creation} for stage '{stage_param}'. "
+            f"Only 'unique-core' stage supports per-test creation flags overrides. "
+            f"For shared stages, configure flags globally (e.g. via --vpy-flags)."
+        )
 
     # Ensure policy registration matches the stage
     if stage_param == "no-policy":
@@ -238,7 +258,7 @@ def pytest_runtest_protocol(
 
     # Case 1: Isolated run (no stage parameter or unique-core)
     if not is_vpy_stage or stage_param == "unique-core":
-        env_unique = policy.new_environment()
+        env_unique = policy.new_environment(flags_creation=flags_creation)
         try:
             with env_unique.use():
                 outcome = yield
@@ -258,7 +278,8 @@ def pytest_runtest_protocol(
 
     # Case 2: Shared/Stateful run (initial-core, reloaded-core, no-core, or no-policy)
     if (
-        stage_param != stage
+        stage_param == "reloaded-core"
+        or stage_param != stage
         or (stage_param in ("initial-core", "reloaded-core") and (env is None or env.disposed))
         or (stage_param in ("no-core", "no-policy") and env)
     ):
@@ -297,6 +318,11 @@ def pytest_runtest_makereport(
     if report.when == "call" and item.stash.get(leaked_key, False):
         err_message = "\n".join(DEFAULT_ERROR_MESSAGE)
         report.longrepr = CleanupFailed(report.longrepr, err_message)
+
+
+def _create_default_policy(session: pytest.Session) -> Policy:
+    flags = session.config.getoption("--vpy-flags", default=None)
+    return Policy(GlobalStore(), flags_creation=flags)
 
 
 def _vpy_policy_impl(session: pytest.Session | None = None) -> Policy:

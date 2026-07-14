@@ -52,6 +52,12 @@ class MockConfig:
     def addinivalue_line(self, name: str, value: str) -> None:
         self.added_lines.append((name, value))
 
+    def getoption(self, name: str, default: Any, skip: bool = False) -> Any | None:
+        try:
+            return getattr(self.option, name)
+        except AttributeError:
+            return default
+
 
 class MockOption:
     def __init__(self, collectonly: bool) -> None:
@@ -61,6 +67,7 @@ class MockOption:
 class MockSession:
     def __init__(self) -> None:
         self.stash = pytest.Stash()
+        self.config = MockConfig()
 
 
 class MockCallspec:
@@ -69,8 +76,9 @@ class MockCallspec:
 
 
 class MockMarker:
-    def __init__(self, args: tuple[Any, ...]) -> None:
-        self.args = args
+    def __init__(self, args: tuple[Any, ...] | None = None, kwargs: dict[str, Any] | None = None) -> None:
+        self.args = args or ()
+        self.kwargs = kwargs or {}
 
 
 class MockDefinition:
@@ -96,7 +104,7 @@ class MockItem:
         self,
         session: pytest.Session | None = None,
         callspec: MockCallspec | None = None,
-        has_marker: bool = False,
+        marker: MockMarker | bool = False,
         path: Path | None = None,
         parent: Any = None,
         leaked: bool = False,
@@ -104,7 +112,7 @@ class MockItem:
         self.session = session
         if callspec is not None:
             self.callspec = callspec
-        self.has_marker = has_marker
+        self.marker = marker
         self.path = path or Path("test.py")
         self.parent = parent
         self.stash = pytest.Stash()
@@ -112,7 +120,13 @@ class MockItem:
             self.stash[vpy_pytest.leaked_key] = True
 
     def get_closest_marker(self, name: str) -> MockMarker | None:
-        return MockMarker(()) if name == "vpy" and self.has_marker else None
+        return (
+            self.marker
+            if isinstance(self.marker, MockMarker)
+            else MockMarker()
+            if name == "vpy" and self.marker
+            else None
+        )
 
 
 class MockReport:
@@ -174,6 +188,7 @@ class MockPolicy:
     def __init__(self, registered: bool = True) -> None:
         self.registered = registered
         self.new_envs = list[MockEnv]()
+        self.flags_creation = 0
 
         class MockManaged: ...
 
@@ -183,7 +198,7 @@ class MockPolicy:
     def is_registered(self) -> bool:
         return self.registered
 
-    def new_environment(self) -> MockEnv:
+    def new_environment(self, flags_creation: int | None = None) -> MockEnv:
         env = MockEnv()
         self.new_envs.append(env)
         return env
@@ -262,6 +277,30 @@ def test_vpy_default_stages() -> None:
 @pytest.mark.vpy("unique-core")
 def test_vpy_unique_core() -> None:
     assert vapoursynth.get_current_environment() is not None
+
+
+@pytest.mark.vpy("unique-core", flags_creation=vapoursynth.ENABLE_GRAPH_INSPECTION)
+def test_vpy_creation_flags() -> None:
+    assert vapoursynth.get_current_environment() is not None
+    assert vapoursynth.core.std.BlankClip().is_inspectable(0)
+
+
+def test_vpy_creation_flags_shared_stage_error(
+    restore_pytest_globals: None, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    session = request.session
+    mock_policy = MockPolicy()
+    session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
+
+    bad_item = MockItem(
+        session,
+        callspec=MockCallspec(**{"vpy_stage": "initial-core"}),
+        marker=MockMarker(("initial-core",), {"flags_creation": 1}),
+    )
+
+    gen = vpy_pytest.pytest_runtest_protocol(bad_item, None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="Cannot specify custom flags_creation"):
+        next(gen)
 
 
 @pytest.mark.vpy("no-core")
@@ -423,7 +462,7 @@ def test_pytest_collection_modifyitems_no_vpy_items(restore_pytest_globals: None
     mock_policy = MockPolicy(registered=True)
     session.stash[vpy_pytest.policy_key] = mock_policy  # type: ignore[misc]
 
-    items = [MockItem(path=Path("test.py"), has_marker=False)]
+    items = [MockItem(path=Path("test.py"), marker=False)]
     vpy_pytest.pytest_collection_modifyitems(session, config_run, items)  # type: ignore[arg-type]
 
     assert not mock_policy.registered
@@ -468,7 +507,7 @@ def test_pytest_runtest_protocol_unparameterized_leak(
         hospice.any_alive = lambda: True
         hospice.freeze = lambda: None
 
-        item = MockItem(session, None, has_marker=True)
+        item = MockItem(session, None, marker=True)
         gen = vpy_pytest.pytest_runtest_protocol(item, None)  # type: ignore[arg-type]
         next(gen)
         outcome = DummyOutcome()
