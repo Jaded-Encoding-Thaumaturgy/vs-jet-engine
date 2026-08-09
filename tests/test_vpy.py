@@ -435,6 +435,7 @@ def test_dispose_prevents_hospice_warning_on_error(caplog: pytest.LogCaptureFixt
         assert not any("Core is still in use" in r.message for r in caplog.records if "vsengine._hospice" in r.name)
 
 
+@pytest.mark.skipif(vapoursynth.__version__ >= (78, 0), reason="VapourSynth R78 or later")
 def test_hospice_warns_if_future_not_deleted(caplog: pytest.LogCaptureFixture) -> None:
     @callback_script
     def test_code(mod: types.ModuleType) -> None:
