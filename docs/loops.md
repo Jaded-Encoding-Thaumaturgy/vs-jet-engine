@@ -2,33 +2,31 @@
 
 The `vsengine.loops` module provides an abstraction layer to integrate VapourSynth with any event loop (asyncio, Qt, Trio, etc.).
 
+---
+
 ## Quick Start
+
+To use async features, you must first attach an event loop adapter. For example, using the standard `asyncio` adapter:
 
 ```python
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.loops import set_loop
 
-# Attach asyncio event loop
+# Attach the asyncio event loop adapter
 set_loop(AsyncIOLoop())
 ```
 
-## Core Concepts
-
-### The Event Loop Abstraction
-
-VapourSynth runs frame processing on its own threads, but your application likely has its own event loop (asyncio, Qt's event loop, etc.). The `EventLoop` class bridges these two worlds:
-
-- **`from_thread`** - Schedule work from a VapourSynth thread onto your main event loop
-- **`to_thread`** - Offload blocking work from your main loop to a worker thread
-- **`next_cycle`** - Yield control to let the event loop process events
-
 ---
 
-## Built-in Adapters
+## Built-in Event Loop Adapters
+
+`vs-engine` includes built-in adapters to bridge VapourSynth's background thread-based processing with Python's structured concurrency and async frameworks.
 
 ### AsyncIOLoop
 
-For asyncio-based applications:
+The `AsyncIOLoop` adapter bridges `vs-engine` to Python's standard `asyncio` library.
+
+#### Usage Example
 
 ```python
 import asyncio
@@ -43,12 +41,13 @@ async def main() -> None:
 
 
 asyncio.run(main())
-
 ```
 
 ### TrioEventLoop
 
-For Trio-based applications:
+The `TrioEventLoop` adapter bridges `vs-engine` to the `trio` library.
+
+#### Usage Example
 
 ```python
 import trio
@@ -68,11 +67,11 @@ trio.run(main)
 
 ---
 
-## Helper Functions
+## Core Concepts & Event Loop Helpers
 
 ### `from_thread(func, *args, **kwargs)`
 
-Run a function on the main event loop from any thread. Preserves the VapourSynth environment.
+Run a function on the main event loop from any thread. Preserves the VapourSynth environment active in the calling thread.
 
 ```python
 from vsengine.loops import from_thread
@@ -86,7 +85,7 @@ def callback_from_vs_thread() -> None:
 
 ### `to_thread(func, *args, **kwargs)`
 
-Run a function in a worker thread. Useful for offloading blocking operations.
+Run a function in a worker thread. Useful for offloading blocking operations from your event loop.
 
 ```python
 from vsengine.loops import to_thread
@@ -100,7 +99,7 @@ async def process() -> None:
 
 ### `keep_environment(func)`
 
-Decorator that captures and restores the VapourSynth environment when the function runs.
+Decorator that captures the VapourSynth environment at creation time and restores it when the function is run.
 
 ```python
 import vapoursynth as vs
@@ -113,7 +112,6 @@ def my_callback() -> vs.VideoNode:
     # VapourSynth environment is preserved here,
     # even if called from a different context
     return vs.core.std.BlankClip()
-
 ```
 
 ### `get_loop()` / `set_loop(loop)`
@@ -131,7 +129,7 @@ set_loop(my_custom_loop)
 
 ## Creating Custom Event Loops
 
-For GUI frameworks or custom event loops, implement the `EventLoop` abstract class:
+To integrate custom GUI event loops (e.g., Qt, wxPython), inherit from `vsengine.loops.EventLoop` and implement the abstract methods:
 
 ```python
 from collections.abc import Callable
@@ -172,22 +170,17 @@ class QtEventLoop(QObject, EventLoop):
     # A more complete example can be found in the vsview/vspreview repositories.
 ```
 
-### Required Methods
+### EventLoop Interface
 
-| Method                               | Description                                  |
-| ------------------------------------ | -------------------------------------------- |
-| `from_thread(func, *args, **kwargs)` | **Required.** Schedule work on the main loop |
-
-### Optional Methods
-
-| Method                             | Description                                                |
-| ---------------------------------- | ---------------------------------------------------------- |
-| `to_thread(func, *args, **kwargs)` | Run in worker thread (default: uses `threading.Thread`)    |
-| `next_cycle()`                     | Yield to event loop (default: schedules via `from_thread`) |
-| `attach()`                         | Called when loop is set active                             |
-| `detach()`                         | Called when loop is replaced                               |
-| `await_future(future)`             | Make a `Future` awaitable (for async loops)                |
-| `wrap_cancelled()`                 | Translate `Cancelled` exceptions                           |
+| Method                               | Status       | Description                                                                     |
+| ------------------------------------ | ------------ | ------------------------------------------------------------------------------- |
+| `from_thread(func, *args, **kwargs)` | **Required** | Schedules callable `func` to run on the main event loop thread.                 |
+| `to_thread(func, *args, **kwargs)`   | Optional     | Runs `func` in a worker thread (default: spawns a standard `threading.Thread`). |
+| `next_cycle()`                       | Optional     | Yields control to the event loop.                                               |
+| `attach()`                           | Optional     | Callback when the loop is registered via `set_loop`.                            |
+| `detach()`                           | Optional     | Callback when the loop is unregistered.                                         |
+| `await_future(future)`               | Optional     | Make a `Future` awaitable (for async loops).                                    |
+| `wrap_cancelled()`                   | Optional     | Context manager to translate internal cancellations to loop-native exceptions.  |
 
 ---
 
