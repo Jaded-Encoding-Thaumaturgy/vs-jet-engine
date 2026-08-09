@@ -21,7 +21,6 @@ from vsengine.vpy import load_script
 with Policy(GlobalStore()) as policy, load_script("/path/to/script.vpy", policy) as script:
     outputs = script.environment.outputs
     print(outputs)
-
 ```
 
 ## Documentation
