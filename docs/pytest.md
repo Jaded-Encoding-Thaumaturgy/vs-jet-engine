@@ -40,6 +40,26 @@ By default this runs the test **twice**: once under `initial-core` and once unde
 
 Pass one or more stage names as positional arguments to override which stages the test runs under.
 
+You can also override VapourSynth `CoreCreationFlags` (e.g. `DISABLE_LIBRARY_UNLOADING`) per-test using the `flags_creation` keyword argument:
+
+```python
+import vapoursynth as vs
+
+
+@pytest.mark.vpy("unique-core", flags_creation=vs.DISABLE_LIBRARY_UNLOADING)
+def test_with_custom_flags():
+    # Environment will be created with DISABLE_LIBRARY_UNLOADING
+    ...
+```
+
+### Global Configuration
+
+To configure environment creation flags globally for the entire test suite, you can pass the `--vpy-flags` option to `pytest`:
+
+```bash
+pytest --vpy-flags=4
+```
+
 ## Stages
 
 | Stage           | Environment Lifecycle                                                        | Use Case                                                                            |
