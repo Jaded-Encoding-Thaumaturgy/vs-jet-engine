@@ -294,7 +294,7 @@ def test_vpy_creation_flags_shared_stage_error(
 
     bad_item = MockItem(
         session,
-        callspec=MockCallspec(**{"vpy_stage": "initial-core"}),
+        callspec=MockCallspec(vpy_stage="initial-core"),
         marker=MockMarker(("initial-core",), {"flags_creation": 1}),
     )
 

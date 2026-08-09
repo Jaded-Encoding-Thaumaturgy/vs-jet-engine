@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests for the policy environment stores."""
 
-import concurrent.futures as futures
 from collections.abc import Iterator
+from concurrent import futures
 from contextvars import copy_context
 from typing import Any
 

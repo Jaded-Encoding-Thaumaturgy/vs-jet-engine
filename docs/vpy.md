@@ -16,7 +16,6 @@ with load_script("/path/to/script.vpy") as script:
 # Run inline code
 with load_code("vs.core.std.BlankClip().set_output()") as script:
     print(vs.get_outputs())
-
 ```
 
 ---
@@ -38,7 +37,6 @@ with Policy() as policy:
 
     print(script.environment.outputs)
     script.dispose()
-
 ```
 
 ### `load_code(code, environment, ...)`
@@ -239,11 +237,7 @@ future.result()  # Wait when needed
 Use `chdir` to temporarily change the working directory:
 
 ```python
-script = load_script(
-    "script.vpy",
-    policy,
-    chdir="/path/to/script/directory"
-)
+script = load_script("script.vpy", policy, chdir="/path/to/script/directory")
 ```
 
 > [!CAUTION]

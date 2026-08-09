@@ -96,7 +96,7 @@ def test_hospice_is_delayed_on_alive_objects(caplog: pytest.LogCaptureFixture) -
     del o1
 
     # o2 is still held by local var AND registry, so refcount > 3
-    with caplog.at_level(logging.WARN, logger="vsengine._hospice"):
+    with caplog.at_level(logging.WARNING, logger="vsengine._hospice"):
         gc.collect()
         gc.collect()
 

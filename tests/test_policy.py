@@ -70,18 +70,14 @@ class TestManagedEnvironment:
 
     @pytest.fixture
     def registered_policy(self, store: GlobalStore) -> Iterator[Policy]:
-        """Fixture that provides a registered Policy."""
-        p = Policy(store)
-        p.register()
-        yield p
-        with contextlib.suppress(RuntimeError):
-            p.unregister()
+        with Policy(store) as p:
+            yield p
 
     def test_new_environment_warns_on_del(self, registered_policy: Policy) -> None:
         env = registered_policy.new_environment()
         with pytest.warns(ResourceWarning):
             del env
-            gc.collect()
+        gc.collect()
 
     def test_new_environment_can_dispose(self, registered_policy: Policy) -> None:
         env = registered_policy.new_environment()

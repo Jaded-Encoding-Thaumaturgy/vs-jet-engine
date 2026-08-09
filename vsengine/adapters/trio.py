@@ -88,16 +88,13 @@ class TrioEventLoop(EventLoop):
 
         future.add_done_callback(_when_done)
 
-        try:
-            await event.wait()
-        except trio.Cancelled:
-            raise
+        await event.wait()
 
         try:
             return future.result()
-        except BaseException as exc:
+        except BaseException:
             with self.wrap_cancelled():
-                raise exc
+                raise
 
     @contextlib.contextmanager
     def wrap_cancelled(self) -> Generator[None]:

@@ -21,6 +21,7 @@ Mark any test with `@pytest.mark.vpy` to opt in. Unmarked tests are never touche
 import pytest
 import vapoursynth as vs
 
+
 @pytest.mark.vpy
 def test_blank_clip():
     clip = vs.core.std.BlankClip()
@@ -91,6 +92,7 @@ Returns the active environment Policy instance managed by the session.
 ```python
 from vsengine.policy import Policy
 
+
 @pytest.mark.vpy
 def test_policy_info(vpy_policy: Policy) -> None:
     assert vpy_policy.is_registered
@@ -106,6 +108,7 @@ This is particularly useful when testing lifecycle events or when running in the
 ```python
 from collections.abc import Callable
 from vsengine.policy import ManagedEnvironment
+
 
 @pytest.mark.vpy("no-core")
 def test_manual_creation(vpy_env_factory: Callable[[], ManagedEnvironment]) -> None:

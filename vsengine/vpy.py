@@ -190,10 +190,7 @@ def chdir_runner[**P, R](
             os.chdir(dir)
 
             try:
-                f = func(*args, **kwargs)
-                return f
-            except Exception:
-                raise
+                return func(*args, **kwargs)
             finally:
                 os.chdir(current)
 
@@ -373,7 +370,7 @@ def load_script(
             _set_module_dunders(module, rscript)
 
             code = compile(f.read(), filename=rscript, dont_inherit=True, flags=0, mode="exec")
-            exec(code, module.__dict__, module.__dict__)
+            exec(code, module.__dict__, module.__dict__)  # noqa: S102
 
     return _load(_execute, environment, module, inline, chdir)
 
@@ -468,7 +465,7 @@ def load_code(
             )
 
             _set_module_dunders(module, filename)
-            exec(code, module.__dict__, module.__dict__)
+            exec(code, module.__dict__, module.__dict__)  # noqa: S102
 
     return _load(_execute, environment, module, inline, chdir)
 

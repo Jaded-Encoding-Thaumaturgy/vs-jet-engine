@@ -17,8 +17,7 @@ def buffer_futures[FrameT: RawFrame](
         prefetch = core.num_threads
     if backlog is None:
         backlog = prefetch * 3
-    if backlog < prefetch:
-        backlog = prefetch
+    backlog = max(backlog, prefetch)
 
     enum_fut = enumerate(futures)
 
