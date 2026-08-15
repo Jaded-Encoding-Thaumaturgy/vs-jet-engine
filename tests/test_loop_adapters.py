@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+import unittest.mock
 from collections.abc import Awaitable, Callable, Generator, Iterator
 from concurrent.futures import CancelledError, Future
 from functools import wraps
@@ -308,3 +309,21 @@ class TestTrio(AsyncAdapterTest):
     def assert_cancelled(self) -> Generator[None]:
         with pytest.raises(trio.Cancelled):
             yield
+
+
+def test_asyncio_from_thread_without_running_loop() -> None:
+    """Ensure AsyncIOLoop gracefully executes inline when no asyncio loop is running."""
+    loop = AsyncIOLoop()
+    fut = loop.from_thread(lambda x: x * 2, 21)
+    assert fut.done()
+    assert fut.result() == 42
+
+
+def test_trio_from_thread_without_running_token() -> None:
+    """Ensure TrioEventLoop gracefully executes inline when no Trio token is active."""
+    nursery = unittest.mock.MagicMock()
+    nursery.cancel_scope.cancel_called = False
+    loop = TrioEventLoop(nursery)
+    fut = loop.from_thread(lambda x: x + 1, 10)
+    assert fut.done()
+    assert fut.result() == 11
