@@ -19,50 +19,74 @@ class AsyncIOLoop(EventLoop):
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        if loop is None:
-            loop = asyncio.get_event_loop()
-        self.loop = loop
+        self._loop = loop
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop | None:
+        if self._loop is not None and not self._loop.is_closed():
+            return self._loop
+        try:
+            self._loop = asyncio.get_running_loop()
+            return self._loop
+        except RuntimeError:
+            return None
+
+    @loop.setter
+    def loop(self, value: asyncio.AbstractEventLoop | None) -> None:
+        self._loop = value
+
+    def attach(self) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop = asyncio.get_running_loop()
+
+    def detach(self) -> None:
+        self._loop = None
 
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         future = Future[R]()
 
-        ctx = contextvars.copy_context()
-
-        def _wrap() -> None:
+        def wrap() -> Future[R]:
             if not future.set_running_or_notify_cancel():
-                return
+                return future
 
             try:
-                result = ctx.run(func, *args, **kwargs)
+                result = func(*args, **kwargs)
             except BaseException as e:
                 future.set_exception(e)
             else:
                 future.set_result(result)
 
-        self.loop.call_soon_threadsafe(_wrap)
+            return future
+
+        if (loop := self.loop) is None or loop.is_closed():
+            return wrap()
+
+        loop.call_soon_threadsafe(wrap, context=contextvars.copy_context())
         return future
 
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
-        ctx = contextvars.copy_context()
+        if (loop := self.loop) is None or loop.is_closed():
+            return super().to_thread(func, *args, **kwargs)
+
         future = Future[R]()
 
-        def _wrap() -> R:
-            return ctx.run(func, *args, **kwargs)
-
-        async def _run() -> None:
+        async def run() -> None:
             try:
-                result = await asyncio.to_thread(_wrap)
+                result = await asyncio.to_thread(lambda: func(*args, **kwargs))
             except BaseException as e:
                 future.set_exception(e)
             else:
                 future.set_result(result)
 
-        self.loop.create_task(_run())
+        loop.create_task(run(), name=func.__name__, context=contextvars.copy_context())
         return future
 
     def next_cycle(self) -> Future[None]:
+        if (loop := self.loop) is None or loop.is_closed():
+            return super().next_cycle()
+
         future = Future[None]()
-        task = asyncio.current_task()
+        task = asyncio.current_task(loop)
 
         def continuation() -> None:
             if task is None or not task.cancelled():
@@ -70,12 +94,12 @@ class AsyncIOLoop(EventLoop):
             else:
                 future.set_exception(Cancelled())
 
-        self.loop.call_soon(continuation)
+        loop.call_soon(continuation)
         return future
 
     async def await_future[T](self, future: Future[T]) -> T:
         with self.wrap_cancelled():
-            return await asyncio.wrap_future(future, loop=self.loop)
+            return await asyncio.wrap_future(future)
 
     @contextlib.contextmanager
     def wrap_cancelled(self) -> Generator[None]:

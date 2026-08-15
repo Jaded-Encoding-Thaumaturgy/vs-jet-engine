@@ -4,6 +4,8 @@
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
 
+from __future__ import annotations
+
 import contextlib
 from collections.abc import Callable, Generator
 from concurrent.futures import Future
@@ -19,52 +21,81 @@ class TrioEventLoop(EventLoop):
     """
 
     def __init__(self, nursery: trio.Nursery, limiter: trio.CapacityLimiter | None = None) -> None:
-        if limiter is None:
-            limiter = trio.to_thread.current_default_thread_limiter()
-
         self.nursery = nursery
-        self.limiter = limiter
+        self._limiter = limiter
         self._token: trio.lowlevel.TrioToken | None = None
 
+    @property
+    def limiter(self) -> trio.CapacityLimiter | None:
+        if self._limiter is not None:
+            return self._limiter
+        with contextlib.suppress(RuntimeError):
+            self._limiter = trio.to_thread.current_default_thread_limiter()
+        return self._limiter
+
+    @limiter.setter
+    def limiter(self, value: trio.CapacityLimiter | None) -> None:
+        self._limiter = value
+
+    @property
+    def token(self) -> trio.lowlevel.TrioToken | None:
+        if self._token is not None:
+            return self._token
+        try:
+            self._token = trio.lowlevel.current_trio_token()
+            return self._token
+        except RuntimeError:
+            return None
+
+    @token.setter
+    def token(self, value: trio.lowlevel.TrioToken | None) -> None:
+        self._token = value
+
     def attach(self) -> None:
-        self._token = trio.lowlevel.current_trio_token()
+        with contextlib.suppress(RuntimeError):
+            self._token = trio.lowlevel.current_trio_token()
 
     def detach(self) -> None:
         self.nursery.cancel_scope.cancel()
 
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
-        assert self._token is not None
+        future = Future[R]()
 
-        fut = Future[R]()
-
-        def _executor() -> None:
-            if not fut.set_running_or_notify_cancel():
-                return
+        def executor() -> Future[R]:
+            if not future.set_running_or_notify_cancel():
+                return future
 
             try:
                 result = func(*args, **kwargs)
             except BaseException as e:
-                fut.set_exception(e)
+                future.set_exception(e)
             else:
-                fut.set_result(result)
+                future.set_result(result)
+            return future
 
-        self._token.run_sync_soon(_executor)
-        return fut
+        if token := self.token:
+            token.run_sync_soon(executor)
+            return future
+
+        return executor()
 
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+        if self.nursery.cancel_scope.cancel_called:
+            return super().to_thread(func, *args, **kwargs)
+
         future = Future[R]()
 
-        async def _run() -> None:
-            def _executor() -> None:
+        async def run() -> None:
+            def executor() -> None:
                 try:
                     result = func(*args, **kwargs)
                     future.set_result(result)
                 except BaseException as e:
                     future.set_exception(e)
 
-            await trio.to_thread.run_sync(_executor, limiter=self.limiter)
+            await trio.to_thread.run_sync(executor, limiter=self.limiter)
 
-        self.nursery.start_soon(_run)
+        self.nursery.start_soon(run, name=func.__name__)
         return future
 
     def next_cycle(self) -> Future[None]:
