@@ -78,12 +78,16 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         result = cls()
 
         def _receive(fn: Future[S]) -> None:
+            if future.cancelled():
+                result.cancel()
+                return
             if (exc := future.exception()) is not None:
                 result.set_exception(exc)
-            else:
+            elif not result.cancelled():
                 result.set_result(future.result())
 
         future.add_done_callback(_receive)
+        result.add_done_callback(lambda f: future.cancel() if f.cancelled() else None)
         return result
 
     @classmethod
@@ -154,18 +158,45 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
     # Manipulating futures
     @overload
-    def then[S](self, success_cb: Callable[[T], S], *, on_loop: bool = ...) -> UnifiedFuture[S]: ...
+    def then[S](
+        self,
+        success_cb: Callable[[T], S],
+        *,
+        cancel_cb: Callable[[], None] | None = ...,
+        on_loop: bool = ...,
+    ) -> UnifiedFuture[S]: ...
     @overload
-    def then[S](self, success_cb: Callable[[T], S], err_cb: None = ..., *, on_loop: bool = ...) -> UnifiedFuture[S]: ...
+    def then[S](
+        self,
+        success_cb: Callable[[T], S],
+        err_cb: None = ...,
+        cancel_cb: Callable[[], None] | None = ...,
+        *,
+        on_loop: bool = ...,
+    ) -> UnifiedFuture[S]: ...
     @overload
-    def then[V](self, success_cb: None, err_cb: Callable[[BaseException], V], *, on_loop: bool = ...) -> UnifiedFuture[T | V]: ...  # fmt: skip  # noqa: E501
+    def then[V](
+        self,
+        success_cb: None,
+        err_cb: Callable[[BaseException], V],
+        cancel_cb: Callable[[], None] | None = ...,
+        *,
+        on_loop: bool = ...,
+    ) -> UnifiedFuture[T | V]: ...
     @overload
-    def then[V](self, *, err_cb: Callable[[BaseException], V], on_loop: bool = ...) -> UnifiedFuture[T | V]: ...
+    def then[V](
+        self,
+        *,
+        err_cb: Callable[[BaseException], V],
+        cancel_cb: Callable[[], None] | None = ...,
+        on_loop: bool = ...,
+    ) -> UnifiedFuture[T | V]: ...
     @overload
     def then[S, V](
         self,
         success_cb: Callable[[T], S],
         err_cb: Callable[[BaseException], V],
+        cancel_cb: Callable[[], None] | None = ...,
         *,
         on_loop: bool = ...,
     ) -> UnifiedFuture[S | V]: ...
@@ -173,6 +204,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         self,
         success_cb: Callable[[T], S] | None = None,
         err_cb: Callable[[BaseException], V] | None = None,
+        cancel_cb: Callable[[], None] | None = None,
         *,
         on_loop: bool = False,
     ) -> Any:
@@ -188,17 +220,25 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
         :param success_cb: Called with the resolved value, or `None` to passthrough.
         :param err_cb: Called with the exception, or `None` to passthrough.
+        :param cancel_cb: Optional callback invoked when the returned future is cancelled.
+            Defaults to cancelling the parent future.
         :param on_loop: If True, execute the callback on the main loop.
         :return: A new `UnifiedFuture` carrying the callback's return value.
         """
         result = UnifiedFuture[Any]()
 
         def _run_cb(cb: Callable[[Any], Any], v: T | BaseException) -> None:
+            if result.cancelled():
+                return
             if on_loop:
                 loop_fut = get_loop().from_thread(cb, v)
 
                 def _forward(lf: Future[Any]) -> None:
-                    if (exc := lf.exception()) is not None:
+                    if result.cancelled():
+                        return
+                    if lf.cancelled():
+                        result.cancel()
+                    elif (exc := lf.exception()) is not None:
                         result.set_exception(exc)
                     else:
                         result.set_result(lf.result())
@@ -213,39 +253,60 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
                     result.set_result(r)
 
         def _done(fn: Future[T]) -> None:
+            if self.cancelled():
+                result.cancel()
+                return
             if (exc := self.exception()) is not None:
                 if err_cb is not None:
                     _run_cb(err_cb, exc)
                 else:
                     result.set_exception(exc)
-            else:
+            elif not result.cancelled():
                 if success_cb is not None:
                     _run_cb(success_cb, self.result())
                 else:
                     result.set_result(self.result())
 
         self.add_done_callback(_done)
+        if cancel_cb is not None:
+            result.add_done_callback(lambda f: cancel_cb() if f.cancelled() else None)
+        else:
+            result.add_done_callback(lambda f: self.cancel() if f.cancelled() else None)
         return result
 
-    def map[V](self, cb: Callable[[T], V], *, on_loop: bool = False) -> UnifiedFuture[V]:
+    def map[V](
+        self,
+        cb: Callable[[T], V],
+        cancel_cb: Callable[[], None] | None = None,
+        *,
+        on_loop: bool = False,
+    ) -> UnifiedFuture[V]:
         """
         Transform the resolved value with `cb`, returning a new future.
 
         :param cb: A callable that transforms the resolved value.
+        :param cancel_cb: Optional callback invoked when the returned future is cancelled.
         :param on_loop: If True, execute the callback on the main loop.
         :return: A new `UnifiedFuture` carrying the transformed value.
         """
-        return self.then(cb, None, on_loop=on_loop)
+        return self.then(cb, None, cancel_cb, on_loop=on_loop)
 
-    def catch[V](self, cb: Callable[[BaseException], V], *, on_loop: bool = False) -> UnifiedFuture[T | V]:
+    def catch[V](
+        self,
+        cb: Callable[[BaseException], V],
+        cancel_cb: Callable[[], None] | None = None,
+        *,
+        on_loop: bool = False,
+    ) -> UnifiedFuture[T | V]:
         """
         Recover from a rejection by handling the exception with `cb`.
 
         :param cb: A callable that handles the exception and returns a recovery value.
+        :param cancel_cb: Optional callback invoked when the returned future is cancelled.
         :param on_loop: If True, execute the callback on the main loop.
         :return: A new `UnifiedFuture` carrying the recovery value on error, or the original resolved value on success.
         """
-        return self.then(None, cb, on_loop=on_loop)
+        return self.then(None, cb, cancel_cb, on_loop=on_loop)
 
     # Nicer Syntax
     def __enter__[EnterT](self: FutureLike[AbstractContextManager[EnterT, Any]]) -> EnterT:

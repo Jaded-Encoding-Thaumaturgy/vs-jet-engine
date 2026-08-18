@@ -118,33 +118,33 @@ def test_unified_future_map() -> None:
     def _crash(v: Any) -> str:
         raise RuntimeError(str(v))
 
-    future = UnifiedFuture.from_call(succeeds)
-    new_future = future.map(lambda v: str(v))
-    assert new_future.result() == "1"
+    future0 = UnifiedFuture.from_call(succeeds)
+    new_future0 = future0.map(lambda v: str(v))
+    assert new_future0.result() == "1"
 
-    new_future = future.map(_crash)
-    assert isinstance(new_future.exception(), RuntimeError)
+    new_future0 = future0.map(_crash)
+    assert isinstance(new_future0.exception(), RuntimeError)
 
-    future = UnifiedFuture.from_call(fails)
-    new_future = future.map(lambda v: str(v))
-    assert isinstance(new_future.exception(), RuntimeError)
+    future1 = UnifiedFuture.from_call(fails)
+    new_future1 = future1.map(lambda v: str(v))
+    assert isinstance(new_future1.exception(), RuntimeError)
 
 
 def test_unified_future_catch() -> None:
     def _crash(_: BaseException) -> str:
         raise RuntimeError("test")
 
-    future = UnifiedFuture.from_call(fails)
-    new_future = future.catch(lambda e: e.__class__.__name__)
-    assert new_future.result() == "RuntimeError"
+    future0 = UnifiedFuture.from_call(fails)
+    new_future0 = future0.catch(lambda e: e.__class__.__name__)
+    assert new_future0.result() == "RuntimeError"
 
-    new_future = future.catch(_crash)
-    assert isinstance(new_future.exception(), RuntimeError)
+    new_future0 = future0.catch(_crash)
+    assert isinstance(new_future0.exception(), RuntimeError)
 
-    future = UnifiedFuture.from_call(succeeds)
-    new_future = future.catch(lambda v: str(v))
+    future1 = UnifiedFuture.from_call(succeeds)
+    new_future1 = future1.catch(lambda v: str(v))
     # Result is 1 because the future succeeded (no exception to catch)
-    result = new_future.result()
+    result = new_future1.result()
     assert result == 1
 
 
@@ -684,3 +684,60 @@ def test_run_as_completed_next_cycle_fails_async() -> None:
         assert isinstance(state.exception(), ValueError)
     finally:
         set_loop(NO_LOOP)
+
+
+def test_unified_future_cancellation_propagation() -> None:
+    raw = UnifiedFuture[int]()
+    mapped = raw.map(lambda x: x * 2)
+    chained = mapped.map(lambda x: x + 1)
+
+    assert chained.cancel() is True
+    assert chained.cancelled() is True
+    assert mapped.cancelled() is True
+    assert raw.cancelled() is True
+
+
+def test_unified_future_child_cancelled_parent_resolves() -> None:
+    raw = UnifiedFuture[int]()
+    mapped = raw.map(lambda x: x * 2, cancel_cb=lambda: None)
+    chained = mapped.map(lambda x: x + 1)
+
+    assert chained.cancel() is True
+    assert chained.cancelled() is True
+    assert mapped.cancelled() is True
+    assert raw.cancelled() is False
+
+    # Resolving raw future whose downstream child was cancelled should not raise InvalidStateError in callbacks
+    raw.set_result(10)
+    assert raw.result() == 10
+
+
+def test_unified_future_custom_on_cancel() -> None:
+    cancelled_calls = list[str]()
+    raw = UnifiedFuture[int]()
+    mapped = raw.map(lambda x: x * 2, cancel_cb=lambda: cancelled_calls.append("custom_cancel"))
+
+    assert mapped.cancel() is True
+    assert mapped.cancelled() is True
+    assert cancelled_calls == ["custom_cancel"]
+    # Parent raw future was not cancelled because custom on_cancel intercepted it
+    assert raw.cancelled() is False
+
+
+def test_unified_future_parent_cancelled() -> None:
+    raw = UnifiedFuture[int]()
+    mapped = raw.map(lambda x: x * 2)
+    caught = raw.catch(lambda _: 0)
+
+    raw.cancel()
+    assert mapped.cancelled() is True
+    assert caught.cancelled() is True
+
+
+def test_unified_future_from_future_cancellation() -> None:
+    raw = Future[int]()
+    uni = UnifiedFuture.from_future(raw)
+
+    assert uni.cancel() is True
+    assert uni.cancelled() is True
+    assert raw.cancelled() is True
