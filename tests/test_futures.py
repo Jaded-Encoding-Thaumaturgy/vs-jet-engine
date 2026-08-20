@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests for the unified future system."""
 
+import asyncio
 import contextlib
 import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
@@ -741,3 +742,46 @@ def test_unified_future_from_future_cancellation() -> None:
     assert uni.cancel() is True
     assert uni.cancelled() is True
     assert raw.cancelled() is True
+
+
+@pytest.mark.asyncio
+async def test_unified_future_add_loop_callback_cancellation_propagation() -> None:
+    set_loop(AsyncIOLoop())
+    raw = UnifiedFuture[int]()
+    chained = raw.add_loop_callback(lambda f: None)
+
+    assert chained.cancel() is True
+    assert chained.cancelled() is True
+    assert raw.cancelled() is True
+
+
+@pytest.mark.asyncio
+async def test_unified_future_add_loop_callback_custom_on_cancel() -> None:
+    set_loop(AsyncIOLoop())
+    cancelled_calls = list[str]()
+    raw = UnifiedFuture[int]()
+    chained = raw.add_loop_callback(lambda f: None, cancel_cb=lambda: cancelled_calls.append("custom_cancel"))
+
+    assert chained.cancel() is True
+    assert chained.cancelled() is True
+    assert cancelled_calls == ["custom_cancel"]
+    assert raw.cancelled() is False
+
+
+@pytest.mark.asyncio
+async def test_unified_future_add_loop_callback_parent_cancelled() -> None:
+    set_loop(AsyncIOLoop())
+    raw = UnifiedFuture[int]()
+    called = list[bool]()
+
+    def cb(f: Future[int]) -> None:
+        called.append(f.cancelled())
+
+    chained = raw.add_loop_callback(cb)
+    raw.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await chained
+
+    assert chained.cancelled() is True
+    assert called == [True]

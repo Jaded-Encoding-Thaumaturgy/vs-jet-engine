@@ -127,7 +127,11 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         # The done_callback should inherit the environment of the current call.
         super().add_done_callback(keep_environment(fn))
 
-    def add_loop_callback(self, func: Callable[[Future[T]], Any]) -> UnifiedFuture[T]:
+    def add_loop_callback(
+        self,
+        func: Callable[[Future[T]], Any],
+        cancel_cb: Callable[[], None] | None = None,
+    ) -> UnifiedFuture[T]:
         """
         Register a callback that is guaranteed to run on the event-loop thread.
 
@@ -135,25 +139,28 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         this method marshals `func` back to the main event loop via `EventLoop.from_thread`.
 
         :param func: A callable that receives the completed future.
+        :param cancel_cb: Optional callback invoked when the returned future is cancelled.
+            Defaults to cancelling the parent future.
         :return: A UnifiedFuture that resolves to the original future's result once the callback completes
             on the event loop.
         """
         result = UnifiedFuture[T]()
 
-        def _wrapper(future: Future[T]) -> None:
-            loop_fut = get_loop().from_thread(func, future)
+        def forward_parent(_: Future[Any]) -> None:
+            if self.cancelled():
+                result.cancel()
+            elif (orig_exc := self.exception()) is not None:
+                result.set_exception(orig_exc)
+            else:
+                result.set_result(self.result())
 
-            def _forward(lf: Future[Any]) -> None:
-                if (exc := lf.exception()) is not None:
-                    result.set_exception(exc)
-                elif (orig_exc := future.exception()) is not None:
-                    result.set_exception(orig_exc)
-                else:
-                    result.set_result(future.result())
+        def wrapper(future: Future[T]) -> None:
+            if result.cancelled():
+                return
+            self._forward_loop_task(get_loop().from_thread(func, future), result, forward_parent)
 
-            loop_fut.add_done_callback(_forward)
-
-        self.add_done_callback(_wrapper)
+        self.add_done_callback(wrapper)
+        self._link_cancellation(result, cancel_cb)
         return result
 
     # Manipulating futures
@@ -227,23 +234,11 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         """
         result = UnifiedFuture[Any]()
 
-        def _run_cb(cb: Callable[[Any], Any], v: T | BaseException) -> None:
+        def run_cb(cb: Callable[[Any], Any], v: T | BaseException) -> None:
             if result.cancelled():
                 return
             if on_loop:
-                loop_fut = get_loop().from_thread(cb, v)
-
-                def _forward(lf: Future[Any]) -> None:
-                    if result.cancelled():
-                        return
-                    if lf.cancelled():
-                        result.cancel()
-                    elif (exc := lf.exception()) is not None:
-                        result.set_exception(exc)
-                    else:
-                        result.set_result(lf.result())
-
-                loop_fut.add_done_callback(_forward)
+                self._forward_loop_task(get_loop().from_thread(cb, v), result)
             else:
                 try:
                     r = cb(v)
@@ -252,26 +247,23 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
                 else:
                     result.set_result(r)
 
-        def _done(fn: Future[T]) -> None:
+        def done(_: Future[T]) -> None:
             if self.cancelled():
                 result.cancel()
                 return
             if (exc := self.exception()) is not None:
                 if err_cb is not None:
-                    _run_cb(err_cb, exc)
+                    run_cb(err_cb, exc)
                 else:
                     result.set_exception(exc)
             elif not result.cancelled():
                 if success_cb is not None:
-                    _run_cb(success_cb, self.result())
+                    run_cb(success_cb, self.result())
                 else:
                     result.set_result(self.result())
 
-        self.add_done_callback(_done)
-        if cancel_cb is not None:
-            result.add_done_callback(lambda f: cancel_cb() if f.cancelled() else None)
-        else:
-            result.add_done_callback(lambda f: self.cancel() if f.cancelled() else None)
+        self.add_done_callback(done)
+        self._link_cancellation(result, cancel_cb)
         return result
 
     def map[V](
@@ -368,6 +360,32 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
             return result.__exit__(exc, val, tb)
 
         raise NotImplementedError("(async) with is not implemented for this object")
+
+    def _link_cancellation(self, target: Future[Any], cancel_cb: Callable[[], None] | None = None) -> None:
+        if cancel_cb is not None:
+            target.add_done_callback(lambda f: cancel_cb() if f.cancelled() else None)
+        else:
+            target.add_done_callback(lambda f: self.cancel() if f.cancelled() else None)
+
+    @staticmethod
+    def _forward_loop_task(
+        loop_fut: Future[Any],
+        target: UnifiedFuture[Any],
+        on_done: Callable[[Future[Any]], None] | None = None,
+    ) -> None:
+        def forward(lf: Future[Any]) -> None:
+            if target.cancelled():
+                return
+            if lf.cancelled():
+                target.cancel()
+            elif (exc := lf.exception()) is not None:
+                target.set_exception(exc)
+            elif on_done is not None:
+                on_done(lf)
+            else:
+                target.set_result(lf.result())
+
+        loop_fut.add_done_callback(forward)
 
 
 class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
