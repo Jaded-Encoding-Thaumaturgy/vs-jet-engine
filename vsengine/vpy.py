@@ -11,9 +11,11 @@ import ast
 import io
 import os
 import sys
+import textwrap
+import traceback
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
-from contextlib import AbstractContextManager, suppress
+from contextlib import AbstractContextManager, nullcontext, suppress
 from types import CodeType, ModuleType, TracebackType
 from typing import Any, Concatenate, Self, overload
 from uuid import uuid4
@@ -44,8 +46,6 @@ class ExecutionError(Exception):
 
         :param parent_error: The original exception that occurred.
         """
-        import textwrap
-
         msg = textwrap.indent(self.extract_traceback(parent_error), "| ")
         super().__init__(f"An exception was raised while running the script.\n{msg}")
         self.parent_error = parent_error
@@ -58,11 +58,7 @@ class ExecutionError(Exception):
         :param error: The exception to extract the traceback from.
         :return: A formatted string containing the traceback.
         """
-        import traceback
-
-        msg = traceback.format_exception(type(error), error, error.__traceback__)
-        msg = "".join(msg)
-        return msg
+        return "".join(traceback.format_exception(type(error), error, error.__traceback__))
 
 
 class WrapAllErrors(AbstractContextManager[None]):
@@ -455,8 +451,8 @@ def load_code(
         with (
             ctx,
             _TempModule(module.__name__, module),
-            _ModifiedPath(path) if path else ctx,
-            _ModifiedArgv0(filename) if path else ctx,
+            _ModifiedPath(path) if path else nullcontext(),
+            _ModifiedArgv0(filename) if path else nullcontext(),
         ):
             code = (
                 compile(script, **{"filename": filename, "dont_inherit": True, "flags": 0, "mode": "exec"} | kwargs)
