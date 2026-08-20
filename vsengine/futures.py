@@ -160,7 +160,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
             self._forward_loop_task(get_loop().from_thread(func, future), result, forward_parent)
 
         self.add_done_callback(wrapper)
-        self._link_cancellation(result, cancel_cb)
+        self._link_cancellation(result, cancel_cb, on_loop=True)
         return result
 
     # Manipulating futures
@@ -263,7 +263,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
                     result.set_result(self.result())
 
         self.add_done_callback(done)
-        self._link_cancellation(result, cancel_cb)
+        self._link_cancellation(result, cancel_cb, on_loop=on_loop)
         return result
 
     def map[V](
@@ -361,9 +361,23 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
         raise NotImplementedError("(async) with is not implemented for this object")
 
-    def _link_cancellation(self, target: Future[Any], cancel_cb: Callable[[], None] | None = None) -> None:
+    def _link_cancellation(
+        self,
+        target: Future[Any],
+        cancel_cb: Callable[[], None] | None = None,
+        *,
+        on_loop: bool = False,
+    ) -> None:
         if cancel_cb is not None:
-            target.add_done_callback(lambda f: cancel_cb() if f.cancelled() else None)
+
+            def on_cancel(f: Future[Any]) -> None:
+                if f.cancelled():
+                    if on_loop:
+                        get_loop().from_thread(cancel_cb)
+                    else:
+                        cancel_cb()
+
+            target.add_done_callback(on_cancel)
         else:
             target.add_done_callback(lambda f: self.cancel() if f.cancelled() else None)
 

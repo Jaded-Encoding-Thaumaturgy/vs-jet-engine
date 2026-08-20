@@ -758,13 +758,41 @@ async def test_unified_future_add_loop_callback_cancellation_propagation() -> No
 @pytest.mark.asyncio
 async def test_unified_future_add_loop_callback_custom_on_cancel() -> None:
     set_loop(AsyncIOLoop())
-    cancelled_calls = list[str]()
+    cancelled_calls = list[threading.Thread]()
+    loop_thread = threading.current_thread()
     raw = UnifiedFuture[int]()
-    chained = raw.add_loop_callback(lambda f: None, cancel_cb=lambda: cancelled_calls.append("custom_cancel"))
+    chained = raw.add_loop_callback(
+        lambda f: None,
+        cancel_cb=lambda: cancelled_calls.append(threading.current_thread()),
+    )
 
     assert chained.cancel() is True
     assert chained.cancelled() is True
-    assert cancelled_calls == ["custom_cancel"]
+    await asyncio.sleep(0.01)
+    assert cancelled_calls == [loop_thread]
+    assert raw.cancelled() is False
+
+
+@pytest.mark.asyncio
+async def test_unified_future_then_custom_on_cancel_on_loop() -> None:
+    set_loop(AsyncIOLoop())
+    cancelled_calls = list[threading.Thread]()
+    loop_thread = threading.current_thread()
+    raw = UnifiedFuture[int]()
+    chained = raw.then(
+        lambda x: x * 2,
+        cancel_cb=lambda: cancelled_calls.append(threading.current_thread()),
+        on_loop=True,
+    )
+
+    # Cancel from a background thread
+    t = threading.Thread(target=chained.cancel)
+    t.start()
+    t.join()
+
+    await asyncio.sleep(0.01)
+    assert chained.cancelled() is True
+    assert cancelled_calls == [loop_thread]
     assert raw.cancelled() is False
 
 
