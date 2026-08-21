@@ -744,6 +744,175 @@ def test_unified_future_from_future_cancellation() -> None:
     assert raw.cancelled() is True
 
 
+def test_unified_future_from_future_identity() -> None:
+    uni = UnifiedFuture.resolve(42)
+    assert UnifiedFuture.from_future(uni) is uni
+
+
+def test_unified_future_from_already_cancelled_future() -> None:
+    raw = Future[int]()
+    raw.cancel()
+    uni = UnifiedFuture.from_future(raw)
+    assert uni.cancelled() is True
+
+    loop = asyncio.new_event_loop()
+    raw_async = loop.create_future()
+    raw_async.cancel()
+    loop.close()
+    uni_async = UnifiedFuture.from_future(raw_async)
+    assert uni_async.cancelled() is True
+
+
+def test_unified_future_from_closed_asyncio_future() -> None:
+    loop = asyncio.new_event_loop()
+    raw = loop.create_future()
+    raw.set_result(42)
+    loop.close()
+
+    uni = UnifiedFuture.from_future(raw)
+
+    assert uni.result() == 42
+
+
+def test_unified_future_from_closed_asyncio_future_incomplete() -> None:
+    loop = asyncio.new_event_loop()
+    raw = loop.create_future()
+    loop.close()
+
+    uni = UnifiedFuture.from_future(raw)
+    assert uni.cancelled() is True
+
+
+def test_unified_future_from_closed_asyncio_future_exception() -> None:
+    loop = asyncio.new_event_loop()
+    raw = loop.create_future()
+    raw.set_exception(ValueError("closed error"))
+    loop.close()
+
+    uni = UnifiedFuture.from_future(raw)
+    assert isinstance(uni.exception(), ValueError)
+
+
+def test_unified_future_cancellation_propagates_to_closed_asyncio_future() -> None:
+    loop = asyncio.new_event_loop()
+    raw = loop.create_future()
+    uni = UnifiedFuture.from_future(raw)
+    loop.close()
+
+    assert uni.cancel() is True
+    assert raw.cancelled() is True
+
+
+@pytest.mark.asyncio
+async def test_unified_future_cancellation_prevents_asyncio_task_from_running() -> None:
+    ran = False
+
+    async def source() -> int:
+        nonlocal ran
+        ran = True
+        return 42
+
+    raw = asyncio.create_task(source())
+    uni = UnifiedFuture.from_future(raw)
+
+    assert uni.cancel() is True
+    await asyncio.sleep(0)
+
+    assert raw.cancelled() is True
+    assert ran is False
+
+
+@pytest.mark.asyncio
+async def test_unified_future_from_asyncio_future_exception() -> None:
+    set_loop(AsyncIOLoop())
+    raw = asyncio.get_running_loop().create_future()
+    uni = UnifiedFuture.from_future(raw)
+    raw.set_exception(ZeroDivisionError("division by zero"))
+
+    with pytest.raises(ZeroDivisionError):
+        await uni
+
+
+def test_unified_future_from_asyncio_foreign_thread() -> None:
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+
+    try:
+        fut = loop.create_future()
+        uni = UnifiedFuture[str].from_future(fut)
+
+        loop.call_soon_threadsafe(fut.set_result, "cross-thread-result")
+        assert uni.result(timeout=2.0) == "cross-thread-result"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join()
+        loop.close()
+
+
+def test_unified_future_from_asyncio_foreign_thread_cancellation() -> None:
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+
+    try:
+        fut = loop.create_future()
+        uni = UnifiedFuture[str].from_future(fut)
+
+        assert uni.cancel() is True
+        assert uni.cancelled() is True
+
+        ev = threading.Event()
+        loop.call_soon_threadsafe(ev.set)
+        assert ev.wait(timeout=2.0)
+
+        assert fut.cancelled() is True
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join()
+        loop.close()
+
+
+def test_unified_future_from_asyncio_concurrent_close_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = asyncio.new_event_loop()
+    fut = loop.create_future()
+    fut.set_result(123)
+
+    def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("Event loop is closed")
+
+    monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
+
+    uni = UnifiedFuture.from_future(fut)
+    assert uni.result() == 123
+
+
+def test_unified_future_from_asyncio_concurrent_close_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = asyncio.new_event_loop()
+    fut = loop.create_future()
+
+    def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("Event loop is closed")
+
+    monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
+
+    uni = UnifiedFuture.from_future(fut)
+    assert uni.cancelled() is True
+
+
+def test_unified_future_from_asyncio_concurrent_close_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = asyncio.new_event_loop()
+    fut = loop.create_future()
+    uni = UnifiedFuture.from_future(fut)
+
+    def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("Event loop is closed")
+
+    monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
+
+    assert uni.cancel() is True
+
+
 @pytest.mark.asyncio
 async def test_unified_future_add_loop_callback_cancellation_propagation() -> None:
     set_loop(AsyncIOLoop())

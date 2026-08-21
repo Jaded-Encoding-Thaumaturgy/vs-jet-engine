@@ -5,10 +5,12 @@
 # SPDX-License-Identifier: EUPL-1.2
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterator
-from concurrent.futures import Future
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from concurrent.futures import CancelledError, Future
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, suppress
 from functools import wraps
 from inspect import isgeneratorfunction
 from types import TracebackType
@@ -63,7 +65,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         return cls.from_future(future)
 
     @classmethod
-    def from_future[S](cls: type[UnifiedFutureLike[S]], future: Future[S]) -> UnifiedFutureLike[S]:
+    def from_future[S](cls: type[UnifiedFutureLike[S]], future: Future[S] | asyncio.Future[S]) -> UnifiedFutureLike[S]:
         """
         Wrap an existing `Future` as a `UnifiedFuture`.
 
@@ -77,17 +79,47 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
         result = cls()
 
-        def _receive(fn: Future[S]) -> None:
+        def receive(_: Future[S] | asyncio.Future[S]) -> None:
+            if result.done():
+                return
             if future.cancelled():
                 result.cancel()
                 return
-            if (exc := future.exception()) is not None:
+            try:
+                exc = future.exception()
+            except (CancelledError, asyncio.CancelledError):
+                # Catch any cancellation race condition
+                result.cancel()
+                return
+
+            if exc is not None:
                 result.set_exception(exc)
-            elif not result.cancelled():
+            else:
                 result.set_result(future.result())
 
-        future.add_done_callback(_receive)
-        result.add_done_callback(lambda f: future.cancel() if f.cancelled() else None)
+        # Safely propagate cancellation back to the original future
+        def on_result_cancelled(f: Future[S]) -> None:
+            if not f.cancelled() or future.done():
+                return
+
+            if isinstance(future, asyncio.Future):
+                cls._dispatch_to_loop(future, future.cancel)
+            else:
+                future.cancel()
+
+        result.add_done_callback(on_result_cancelled)
+
+        # Safely register the completion callback
+        if isinstance(future, asyncio.Future):
+            cls._dispatch_to_loop(
+                future,
+                future.add_done_callback,
+                receive,
+                on_closed_done=receive,
+                on_closed_incomplete=result.cancel,
+            )
+        else:
+            future.add_done_callback(receive)
         return result
 
     @classmethod
@@ -360,6 +392,43 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
             return result.__exit__(exc, val, tb)
 
         raise NotImplementedError("(async) with is not implemented for this object")
+
+    @staticmethod
+    def _dispatch_to_loop[*Ts](
+        fut: asyncio.Future[Any],
+        action: Callable[[*Ts], Any],
+        *args: *Ts,
+        on_closed_done: Callable[[asyncio.Future[Any]], Any] | None = None,
+        on_closed_incomplete: Callable[[], Any] | None = None,
+    ) -> None:
+        f_loop = fut.get_loop()
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop is f_loop:
+            action(*args)
+        elif f_loop.is_closed():
+            if fut.done() and on_closed_done:
+                on_closed_done(fut)
+            elif on_closed_incomplete:
+                on_closed_incomplete()
+            else:
+                with suppress(RuntimeError):
+                    action(*args)
+        else:
+            try:
+                f_loop.call_soon_threadsafe(action, *args, context=contextvars.copy_context())
+            except RuntimeError:
+                # Loop closed concurrently
+                if fut.done() and on_closed_done is not None:
+                    on_closed_done(fut)
+                elif on_closed_incomplete is not None:
+                    on_closed_incomplete()
+                else:
+                    with suppress(RuntimeError):
+                        action(*args)
 
     def _link_cancellation(
         self,
