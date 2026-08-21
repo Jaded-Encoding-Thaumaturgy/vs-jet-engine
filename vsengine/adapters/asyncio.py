@@ -78,7 +78,7 @@ class AsyncIOLoop(EventLoop):
             else:
                 future.set_result(result)
 
-        loop.create_task(run(), name=func.__name__, context=contextvars.copy_context())
+        loop.create_task(run(), name=getattr(func, "__name__", None), context=contextvars.copy_context())
         return future
 
     def next_cycle(self) -> Future[None]:
