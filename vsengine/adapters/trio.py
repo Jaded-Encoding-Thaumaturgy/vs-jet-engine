@@ -25,6 +25,8 @@ class TrioEventLoop(EventLoop):
         self.nursery = nursery
         self._limiter = limiter
         self._token: trio.lowlevel.TrioToken | None = None
+        with contextlib.suppress(RuntimeError):
+            self._token = trio.lowlevel.current_trio_token()
 
     @property
     def limiter(self) -> trio.CapacityLimiter | None:
@@ -64,6 +66,9 @@ class TrioEventLoop(EventLoop):
         self._limiter = None
 
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+        if (token := self.token) is None:
+            raise RuntimeError("No running Trio event loop or token is inactive.")
+
         future = Future[R]()
 
         def executor() -> Future[R]:
@@ -78,18 +83,19 @@ class TrioEventLoop(EventLoop):
                 future.set_result(result)
             return future
 
-        if token := self.token:
-            try:
-                token.run_sync_soon(contextvars.copy_context().run, executor)
-                return future
-            except (trio.RunFinishedError, trio.ClosedResourceError):
-                self._token = None
+        try:
+            token.run_sync_soon(contextvars.copy_context().run, executor)
+        except (trio.RunFinishedError, trio.ClosedResourceError) as e:
+            self._token = None
+            raise RuntimeError("Trio event loop has already finished or is closed.") from e
 
-        return executor()
+        return future
 
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
-        if self.nursery is None or self.nursery.cancel_scope.cancel_called:
-            return super().to_thread(func, *args, **kwargs)
+        if self.nursery is None:
+            raise RuntimeError("Trio nursery is not set.")
+        if self.nursery.cancel_scope.cancel_called:
+            raise RuntimeError("Trio nursery has been cancelled.")
 
         future = Future[R]()
 
@@ -114,14 +120,16 @@ class TrioEventLoop(EventLoop):
 
         try:
             self.nursery.start_soon(run, name=getattr(func, "__name__", None))
-        except RuntimeError:
-            return super().to_thread(func, *args, **kwargs)
+        except RuntimeError as e:
+            raise RuntimeError("Trio nursery is closed or cannot start tasks.") from e
 
         return future
 
     def next_cycle(self) -> Future[None]:
-        if self.token is None or self.nursery is None or self.nursery.cancel_scope.cancel_called:
-            return super().next_cycle()
+        if self.token is None:
+            raise RuntimeError("No running Trio event loop or token is inactive.")
+        if self.nursery is None or self.nursery.cancel_scope.cancel_called:
+            raise RuntimeError("Trio nursery is not set or has been cancelled.")
 
         future = Future[None]()
 

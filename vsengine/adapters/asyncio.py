@@ -20,6 +20,9 @@ class AsyncIOLoop(EventLoop):
 
     def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._loop = loop
+        if self._loop is None:
+            with contextlib.suppress(RuntimeError):
+                self._loop = asyncio.get_running_loop()
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop | None:
@@ -43,6 +46,9 @@ class AsyncIOLoop(EventLoop):
         self._loop = None
 
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+        if (loop := self.loop) is None or loop.is_closed():
+            raise RuntimeError("No running asyncio event loop or loop is closed.")
+
         future = Future[R]()
 
         def wrap() -> Future[R]:
@@ -58,21 +64,21 @@ class AsyncIOLoop(EventLoop):
 
             return future
 
-        if (loop := self.loop) is None or loop.is_closed():
-            return wrap()
-
         loop.call_soon_threadsafe(wrap, context=contextvars.copy_context())
         return future
 
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         if (loop := self.loop) is None or loop.is_closed():
-            return super().to_thread(func, *args, **kwargs)
+            raise RuntimeError("No running asyncio event loop or loop is closed.")
 
         future = Future[R]()
 
         async def run() -> None:
+            if not future.set_running_or_notify_cancel():
+                return
+
             try:
-                result = await asyncio.to_thread(lambda: func(*args, **kwargs))
+                result = await asyncio.to_thread(func, *args, **kwargs)
             except BaseException as e:
                 future.set_exception(e)
             else:
@@ -83,7 +89,7 @@ class AsyncIOLoop(EventLoop):
 
     def next_cycle(self) -> Future[None]:
         if (loop := self.loop) is None or loop.is_closed():
-            return super().next_cycle()
+            raise RuntimeError("No running asyncio event loop or loop is closed.")
 
         future = Future[None]()
         task = asyncio.current_task(loop)

@@ -313,22 +313,30 @@ class TestTrio(AsyncAdapterTest):
             yield
 
 
-def test_asyncio_from_thread_without_running_loop() -> None:
-    """Ensure AsyncIOLoop gracefully executes inline when no asyncio loop is running."""
+def test_asyncio_methods_without_running_loop() -> None:
+    """Ensure AsyncIOLoop raises RuntimeError when no asyncio loop is running."""
     loop = AsyncIOLoop()
-    fut = loop.from_thread(lambda x: x * 2, 21)
-    assert fut.done()
-    assert fut.result() == 42
+    with pytest.raises(RuntimeError, match="No running asyncio event loop"):
+        loop.from_thread(lambda x: x * 2, 21)
+
+    with pytest.raises(RuntimeError, match="No running asyncio event loop"):
+        loop.to_thread(lambda x: x * 2, 21)
+
+    with pytest.raises(RuntimeError, match="No running asyncio event loop"):
+        loop.next_cycle()
 
 
-def test_trio_from_thread_without_running_token() -> None:
-    """Ensure TrioEventLoop gracefully executes inline when no Trio token is active."""
-    nursery = unittest.mock.MagicMock()
-    nursery.cancel_scope.cancel_called = False
-    loop = TrioEventLoop(nursery)
-    fut = loop.from_thread(lambda x: x + 1, 10)
-    assert fut.done()
-    assert fut.result() == 11
+def test_trio_methods_without_running_token() -> None:
+    """Ensure TrioEventLoop raises RuntimeError when no Trio token or nursery is active."""
+    loop = TrioEventLoop()
+    with pytest.raises(RuntimeError, match="No running Trio event loop"):
+        loop.from_thread(lambda x: x + 1, 10)
+
+    with pytest.raises(RuntimeError, match="Trio nursery is not set"):
+        loop.to_thread(lambda x: x + 1, 10)
+
+    with pytest.raises(RuntimeError, match="No running Trio event loop"):
+        loop.next_cycle()
 
 
 def test_trio_from_thread_contextvars() -> None:
@@ -345,10 +353,7 @@ def test_trio_from_thread_contextvars() -> None:
                 fut = loop.from_thread(var.get)
                 results.append(fut.result(timeout=0.5))
 
-            t = threading.Thread(target=worker)
-            t.start()
-            t.join()
-
+            await trio.to_thread.run_sync(worker)
             assert results == ["custom_val"]
 
     trio.run(main)
