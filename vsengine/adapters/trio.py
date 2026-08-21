@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 from collections.abc import Callable, Generator
 from concurrent.futures import Future
 
@@ -20,7 +21,7 @@ class TrioEventLoop(EventLoop):
     Bridges vs-engine to Trio.
     """
 
-    def __init__(self, nursery: trio.Nursery, limiter: trio.CapacityLimiter | None = None) -> None:
+    def __init__(self, nursery: trio.Nursery | None = None, limiter: trio.CapacityLimiter | None = None) -> None:
         self.nursery = nursery
         self._limiter = limiter
         self._token: trio.lowlevel.TrioToken | None = None
@@ -56,7 +57,11 @@ class TrioEventLoop(EventLoop):
             self._token = trio.lowlevel.current_trio_token()
 
     def detach(self) -> None:
-        self.nursery.cancel_scope.cancel()
+        if self.nursery is not None:
+            with contextlib.suppress(RuntimeError):
+                self.nursery.cancel_scope.cancel()
+        self._token = None
+        self._limiter = None
 
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         future = Future[R]()
@@ -74,36 +79,54 @@ class TrioEventLoop(EventLoop):
             return future
 
         if token := self.token:
-            token.run_sync_soon(executor)
-            return future
+            try:
+                token.run_sync_soon(contextvars.copy_context().run, executor)
+                return future
+            except (trio.RunFinishedError, trio.ClosedResourceError):
+                self._token = None
 
         return executor()
 
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
-        if self.nursery.cancel_scope.cancel_called:
+        if self.nursery is None or self.nursery.cancel_scope.cancel_called:
             return super().to_thread(func, *args, **kwargs)
 
         future = Future[R]()
 
         async def run() -> None:
             def executor() -> None:
+                if not future.set_running_or_notify_cancel():
+                    return
+
                 try:
                     result = func(*args, **kwargs)
-                    future.set_result(result)
                 except BaseException as e:
                     future.set_exception(e)
+                else:
+                    future.set_result(result)
 
-            await trio.to_thread.run_sync(executor, limiter=self.limiter)
+            try:
+                await trio.to_thread.run_sync(executor, limiter=self.limiter)
+            except BaseException as e:
+                if not future.done():
+                    future.set_exception(Cancelled() if isinstance(e, trio.Cancelled) else e)
+                raise
 
-        self.nursery.start_soon(run, name=func.__name__)
+        try:
+            self.nursery.start_soon(run, name=getattr(func, "__name__", None))
+        except RuntimeError:
+            return super().to_thread(func, *args, **kwargs)
+
         return future
 
     def next_cycle(self) -> Future[None]:
-        scope = trio.CancelScope()
+        if self.token is None or self.nursery is None or self.nursery.cancel_scope.cancel_called:
+            return super().next_cycle()
+
         future = Future[None]()
 
         def continuation() -> None:
-            if scope.cancel_called:
+            if self.nursery is not None and self.nursery.cancel_scope.cancel_called:
                 future.set_exception(Cancelled())
             else:
                 future.set_result(None)
@@ -112,6 +135,13 @@ class TrioEventLoop(EventLoop):
         return future
 
     async def await_future[T](self, future: Future[T]) -> T:
+        if future.done():
+            try:
+                return future.result()
+            except BaseException:
+                with self.wrap_cancelled():
+                    raise
+
         event = trio.Event()
 
         def _when_done(_: Future[T]) -> None:

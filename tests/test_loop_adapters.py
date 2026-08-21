@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import functools
 import threading
 import unittest.mock
 from collections.abc import Awaitable, Callable, Generator, Iterator
@@ -327,3 +329,69 @@ def test_trio_from_thread_without_running_token() -> None:
     fut = loop.from_thread(lambda x: x + 1, 10)
     assert fut.done()
     assert fut.result() == 11
+
+
+def test_trio_from_thread_contextvars() -> None:
+    """Ensure TrioEventLoop propagates contextvars from the calling thread."""
+    var: contextvars.ContextVar[str] = contextvars.ContextVar("var", default="default")
+
+    async def main() -> None:
+        async with trio.open_nursery() as nursery:
+            loop = TrioEventLoop(nursery)
+            results = list[str]()
+
+            def worker() -> None:
+                var.set("custom_val")
+                fut = loop.from_thread(var.get)
+                results.append(fut.result(timeout=0.5))
+
+            t = threading.Thread(target=worker)
+            t.start()
+            t.join()
+
+            assert results == ["custom_val"]
+
+    trio.run(main)
+
+
+def test_to_thread_with_partial() -> None:
+    """Ensure to_thread handles functools.partial and callables without __name__."""
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    part = functools.partial(add, 10, 20)
+
+    # Test with TrioEventLoop
+    async def trio_main() -> None:
+        async with trio.open_nursery() as nursery:
+            loop = TrioEventLoop(nursery)
+            fut = loop.to_thread(part)
+            while not fut.done():
+                await trio.sleep(0.01)
+            assert fut.result() == 30
+
+    trio.run(trio_main)
+
+    # Test with AsyncIOLoop
+    async def asyncio_main() -> None:
+        loop = AsyncIOLoop()
+        fut = loop.to_thread(part)
+        while not fut.done():
+            await asyncio.sleep(0.01)
+        assert fut.result() == 30
+
+    asyncio.run(asyncio_main())
+
+
+def test_trio_detach_lifecycle() -> None:
+    """Ensure detach cleanly resets token and limiter."""
+    nursery = unittest.mock.MagicMock()
+    loop = TrioEventLoop(nursery)
+    loop.token = unittest.mock.MagicMock()
+    loop.limiter = unittest.mock.MagicMock()
+
+    loop.detach()
+    nursery.cancel_scope.cancel.assert_called_once()
+    assert loop._token is None
+    assert loop._limiter is None
