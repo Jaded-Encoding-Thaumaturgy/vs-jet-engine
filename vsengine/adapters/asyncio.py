@@ -97,7 +97,7 @@ class AsyncIOLoop(EventLoop):
         loop.call_soon(continuation)
         return future
 
-    async def await_future[T](self, future: Future[T]) -> T:
+    async def await_future[T](self, future: Future[T] | asyncio.Future[T]) -> T:
         with self.wrap_cancelled():
             return await asyncio.wrap_future(future)
 
@@ -106,4 +106,4 @@ class AsyncIOLoop(EventLoop):
         try:
             yield
         except Cancelled:
-            raise asyncio.CancelledError() from None
+            raise asyncio.CancelledError from None
