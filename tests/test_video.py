@@ -6,11 +6,13 @@
 """Tests for the video module."""
 
 from collections.abc import Iterator
+from concurrent.futures import Future
 
 import pytest
 from vapoursynth import GRAY8, RGB24, Error, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
 
 from tests._testutils import use_standalone_policy
+from vsengine._nodes import buffer_futures, close_when_needed
 from vsengine.video import frame, frames, planes, render
 
 AnyFormat = PresetVideoFormat | VideoFormat
@@ -288,3 +290,49 @@ def test_render_backlog_less_than_prefetch() -> None:
     # This will trigger backlog = prefetch line in buffer_futures
     data = b"".join(f[1] for f in render(clip, prefetch=4, backlog=2))
     assert data == b"\0\0\0\0\0"
+
+
+def test_buffer_futures_resolved_and_cancelled() -> None:
+    # Test already resolved futures
+    f1 = Future[VideoFrame]()
+    clip = generate_video(length=2)
+    frame0 = clip.get_frame(0)
+    f1.set_result(frame0)
+
+    f2 = Future[VideoFrame]()
+    f2.set_result(clip.get_frame(1))
+
+    res = list(buffer_futures([f1, f2], prefetch=2))
+    assert len(res) == 2
+    assert res[0].result().props["FrameNumber"] == 0
+    assert res[1].result().props["FrameNumber"] == 1
+
+    # Test cancelled future in buffer_futures
+    fc1 = Future[VideoFrame]()
+    fc1.cancel()
+    fc2 = Future[VideoFrame]()
+    fc2.set_result(frame0)
+
+    res_cancel = list(buffer_futures([fc1, fc2], prefetch=2))
+    assert res_cancel[0].cancelled()
+
+    # Test close_when_needed with cancelled future
+    fc3 = Future[VideoFrame]()
+    fc3.cancel()
+    res_close = list(close_when_needed([fc3]))
+    assert len(res_close) == 1
+    assert res_close[0].cancelled()
+
+
+def test_buffer_futures_early_exit() -> None:
+    futs = [Future[VideoFrame]() for _ in range(10)]
+    gen = buffer_futures(futs, prefetch=4, backlog=8)
+    first = next(gen)
+    clip = generate_video(length=1)
+    first.set_result(clip.get_frame(0))
+    assert first.result().props["FrameNumber"] == 0
+
+    # Closing generator early should cancel queued futures in backlog/reorder
+    gen.close()
+    cancelled_count = sum(1 for f in futs if f.cancelled())
+    assert cancelled_count > 0

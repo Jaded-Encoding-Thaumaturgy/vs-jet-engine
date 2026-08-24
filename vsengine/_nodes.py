@@ -3,113 +3,158 @@
 # Copyright (C) 2025  Jaded-Encoding-Thaumaturgy
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
-from collections.abc import Iterable, Iterator
+
+from collections.abc import Generator, Iterable
 from concurrent.futures import Future
-from threading import RLock
+from threading import Condition
+from typing import override
 
 from vapoursynth import RawFrame, core
 
 
-def buffer_futures[FrameT: RawFrame](
-    futures: Iterable[Future[FrameT]], prefetch: int = 0, backlog: int | None = None
-) -> Iterator[Future[FrameT]]:
-    if prefetch == 0:
-        prefetch = core.num_threads
-    if backlog is None:
-        backlog = prefetch * 3
-    backlog = max(backlog, prefetch)
+class _PrefetchBuffer[FrameT: RawFrame](Generator[Future[FrameT]]):
+    __slots__ = ("backlog", "cond", "finished", "prefetch", "refilling", "reorder", "running", "sidx", "source")
 
-    enum_fut = enumerate(futures)
+    def __init__(self, source: Iterable[Future[FrameT]], prefetch: int, backlog: int) -> None:
+        self.source = enumerate(source)
+        self.prefetch = prefetch
+        self.backlog = backlog
+        self.cond = Condition()
+        self.reorder = dict[int, Future[FrameT]]()
+        self.running = 0
+        self.sidx = 0
+        self.finished = False
+        self.refilling = False
 
-    finished = False
-    running = 0
-    lock = RLock()
-    reorder = dict[int, Future[FrameT]]()
+        # Initial prefetch fill
+        with self.cond:
+            self.refill()
 
-    def _request_next() -> None:
-        nonlocal finished, running
-        with lock:
-            if finished:
-                return
+    @override
+    def send(self, value: None) -> Future[FrameT]:
+        with self.cond:
+            # Wait until the next sequential frame is available or all work is done
+            self.cond.wait_for(lambda: self.sidx in self.reorder or (self.finished and not self.reorder))
 
-            ni = next(enum_fut, None)
-            if ni is None:
-                finished = True
-                return
+            if self.finished and not self.reorder:
+                self.close()
+                raise StopIteration
 
-            running += 1
+            fut = self.reorder.pop(self.sidx)
+            self.sidx += 1
+            # Slot freed from reorder; request next future to replenish the backlog
+            self.refill()
+            self.cond.notify_all()
+            return fut
 
-            idx, fut = ni
-            reorder[idx] = fut
-            fut.add_done_callback(_finished)
+    @override
+    def throw(self, typ: type[BaseException] | BaseException, *_: object) -> Future[FrameT]:
+        self.close()
+        raise typ
 
-    def _finished(f: Future[FrameT]) -> None:
-        nonlocal finished, running
-        with lock:
-            running -= 1
-            if finished:
-                return
+    @override
+    def close(self) -> None:
+        with self.cond:
+            self.finished = True
+            remaining = list(self.reorder.values())
+            self.reorder.clear()
+            self.cond.notify_all()
 
-            if f.exception() is not None:
-                finished = True
-                return
+        for f in remaining:
+            f.cancel()
 
-            _refill()
-
-    def _refill() -> None:
-        if finished:
+    def refill(self) -> None:
+        """
+        Request new futures up to concurrency 'prefetch' and memory 'backlog' limits.
+        Must be called with lock held.
+        """
+        if self.finished or self.refilling:
             return
 
-        with lock:
-            # Two rules: 1. Don't exceed the concurrency barrier.
-            #            2. Don't exceed unused-frames-backlog
-            while (not finished) and (running < prefetch) and len(reorder) < backlog:
-                _request_next()
+        self.refilling = True
+        try:
+            # Two rules:
+            # - Don't exceed running concurrency.
+            # - Don't exceed unconsumed backlog.
+            while not self.finished and self.running < self.prefetch and len(self.reorder) < self.backlog:
+                self._request_next()
+        finally:
+            self.refilling = False
 
-    _refill()
+    def _request_next(self) -> None:
+        # Must be called with lock held
+        if self.finished:
+            return
 
-    sidx = 0
-    try:
-        while (not finished) or (len(reorder) > 0) or running > 0:
-            if sidx not in reorder:
-                # Spin. Reorder being empty should never happen.
-                continue
+        try:
+            ni = next(self.source, None)
+        except BaseException:
+            self.finished = True
+            self.cond.notify_all()
+            raise
 
-            # Get next requested frame
-            fut = reorder[sidx]
-            del reorder[sidx]
-            sidx += 1
-            _refill()
+        if ni is None:
+            self.finished = True
+            return
 
-            yield fut
+        self.running += 1
+        idx, fut = ni
+        self.reorder[idx] = fut
+        fut.add_done_callback(self._on_done)
 
-    finally:
-        finished = True
+    def _on_done(self, fut: Future[FrameT]) -> None:
+        with self.cond:
+            self.running -= 1
+            if self.finished:
+                return self.cond.notify_all()
+
+            # If a future fails or was cancelled, stop requesting further work
+            if fut.cancelled() or fut.exception() is not None:
+                self.finished = True
+                return self.cond.notify_all()
+
+            # Top up the prefetch pipeline if not already inside a refill loop
+            if not self.refilling:
+                self.refill()
+            self.cond.notify_all()
 
 
-def close_when_needed[FrameT: RawFrame](future_iterable: Iterable[Future[FrameT]]) -> Iterator[Future[FrameT]]:
-    def copy_future_and_run_cb_before(fut: Future[FrameT]) -> Future[FrameT]:
+def buffer_futures[FrameT: RawFrame](
+    futures: Iterable[Future[FrameT]],
+    prefetch: int | None = None,
+    backlog: int | None = None,
+) -> _PrefetchBuffer[FrameT]:
+    if prefetch is None or prefetch <= 0:
+        prefetch = core.num_threads
+    if backlog is None or backlog < 0:
+        backlog = prefetch * 3
+
+    return _PrefetchBuffer(futures, prefetch, max(backlog, prefetch))
+
+
+def close_when_needed[FrameT: RawFrame](future_iterable: Iterable[Future[FrameT]]) -> Generator[Future[FrameT]]:
+    def wrap_open_future(fut: Future[FrameT]) -> Future[FrameT]:
         f = Future[FrameT]()
 
-        def _as_completed(_: Future[FrameT]) -> None:
+        def as_completed(target: Future[FrameT]) -> None:
+            if target.cancelled():
+                f.cancel()
+                return
+
+            if (exc := target.exception()) is not None:
+                f.set_exception(exc)
+                return
+
             try:
-                r = fut.result()
-            except Exception as e:
+                new_r = target.result().__enter__()
+            except BaseException as e:
                 f.set_exception(e)
             else:
-                new_r = r.__enter__()
                 f.set_result(new_r)
 
-        fut.add_done_callback(_as_completed)
+        fut.add_done_callback(as_completed)
         return f
 
-    def close_fut(f: Future[FrameT]) -> None:
-        def _do_close(_: Future[FrameT]) -> None:
-            if f.exception() is None:
-                f.result().__exit__(None, None, None)
-
-        f.add_done_callback(_do_close)
-
     for fut in future_iterable:
-        yield copy_future_and_run_cb_before(fut)
-        close_fut(fut)
+        yield wrap_open_future(fut)
+        fut.add_done_callback(lambda f: f.result().__exit__() if not f.cancelled() and f.exception() is None else None)

@@ -71,7 +71,7 @@ def frames(
     node: vs.VideoNode,
     env: vs.Environment | ManagedEnvironment | None = None,
     *,
-    prefetch: int = 0,
+    prefetch: int | None = None,
     backlog: int | None = None,
     # Unlike the implementation provided by VapourSynth,
     # we don't have to care about backwards compatibility and
@@ -108,7 +108,7 @@ def render(
     node: vs.VideoNode,
     env: vs.Environment | ManagedEnvironment | None = None,
     *,
-    prefetch: int = 0,
+    prefetch: int | None = None,
     backlog: int | None = 0,
     y4m: bool = False,
 ) -> Iterator[Future[tuple[int, bytes]]]:
