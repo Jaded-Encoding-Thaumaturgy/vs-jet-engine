@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterator
-from concurrent.futures import CancelledError, Future
+from concurrent.futures import CancelledError, Future, InvalidStateError
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, suppress
 from functools import wraps
 from inspect import isgeneratorfunction
@@ -93,9 +93,11 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
                 return
 
             if exc is not None:
-                result.set_exception(exc)
+                with suppress(InvalidStateError):
+                    result.set_exception(exc)
             else:
-                result.set_result(future.result())
+                with suppress(InvalidStateError):
+                    result.set_result(future.result())
 
         # Safely propagate cancellation back to the original future
         def on_result_cancelled(f: Future[S]) -> None:
@@ -182,9 +184,11 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
             if self.cancelled():
                 result.cancel()
             elif (orig_exc := self.exception()) is not None:
-                result.set_exception(orig_exc)
+                with suppress(InvalidStateError):
+                    result.set_exception(orig_exc)
             else:
-                result.set_result(self.result())
+                with suppress(InvalidStateError):
+                    result.set_result(self.result())
 
         def wrapper(future: Future[T]) -> None:
             if result.cancelled():
@@ -275,9 +279,11 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
                 try:
                     r = cb(v)
                 except Exception as e:
-                    result.set_exception(e)
+                    with suppress(InvalidStateError):
+                        result.set_exception(e)
                 else:
-                    result.set_result(r)
+                    with suppress(InvalidStateError):
+                        result.set_result(r)
 
         def done(_: Future[T]) -> None:
             if self.cancelled():
@@ -287,12 +293,14 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
                 if err_cb is not None:
                     run_cb(err_cb, exc)
                 else:
-                    result.set_exception(exc)
+                    with suppress(InvalidStateError):
+                        result.set_exception(exc)
             elif not result.cancelled():
                 if success_cb is not None:
                     run_cb(success_cb, self.result())
                 else:
-                    result.set_result(self.result())
+                    with suppress(InvalidStateError):
+                        result.set_result(self.result())
 
         self.add_done_callback(done)
         self._link_cancellation(result, cancel_cb, on_loop=on_loop)
@@ -462,11 +470,13 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
             if lf.cancelled():
                 target.cancel()
             elif (exc := lf.exception()) is not None:
-                target.set_exception(exc)
+                with suppress(InvalidStateError):
+                    target.set_exception(exc)
             elif on_done is not None:
                 on_done(lf)
             else:
-                target.set_result(lf.result())
+                with suppress(InvalidStateError):
+                    target.set_result(lf.result())
 
         loop_fut.add_done_callback(forward)
 
