@@ -17,15 +17,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vapoursynth-version: [74, 75, 76, 77, 78, 79]
-        python-version: ["3.12", "3.13", "3.14"]
+        vapoursynth-version: [74, 75, 76, 77, 78, 79, 80]
+        python-version: ["3.12", "3.13", "3.14", "3.15"]
+        include:
+          - vapoursynth-version: 80
+            python-version: "3.15t"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
