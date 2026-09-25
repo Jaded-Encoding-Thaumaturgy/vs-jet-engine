@@ -117,6 +117,13 @@ def test_render() -> None:
     assert data == b"\0\0\0"
 
 
+def test_render_frame_numbers_async_futures() -> None:
+    clip = generate_video(length=5)
+    r = render(clip)
+    futs = list(r.futures)
+    assert [f.result()[0] for f in futs] == [1, 2, 3, 4, 5]
+
+
 def test_render_y4m() -> None:
     clip = generate_video()
     data = b"".join(f[1] for f in render(clip, y4m=True))
