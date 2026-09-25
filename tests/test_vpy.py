@@ -16,6 +16,7 @@ import threading
 import types
 import weakref
 from collections.abc import Callable, Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -608,3 +609,23 @@ def test_load_code_with_script_as_environment() -> None:
         load_code("assert val == 42", s1),
     ):
         ...
+
+
+def test_concurrent_script_run() -> None:
+    calls = 0
+
+    def slow_exec(_ctx: Any, _mod: Any) -> None:
+        nonlocal calls
+        calls += 1
+
+    with Policy(GlobalStore()) as p:
+        script = _load(slow_exec, p, "__concurrent__", inline=False, chdir=None)
+        try:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futs = [ex.submit(script.run) for _ in range(8)]
+                for f in futs:
+                    f.result().result()
+            assert calls == 1
+        finally:
+            script.dispose()
+

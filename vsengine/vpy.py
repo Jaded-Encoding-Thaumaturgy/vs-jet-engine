@@ -12,6 +12,7 @@ import io
 import os
 import sys
 import textwrap
+import threading
 import traceback
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
@@ -206,6 +207,7 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
         self.environment: EnvT = environment
         self.runner = runner
         self.module = module
+        self._lock = threading.Lock()
 
     def __enter__(self) -> Self:
         self.result()
@@ -229,12 +231,13 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
         """
         self._future: Future[None]
 
-        if hasattr(self, "_future"):
+        with self._lock:
+            if hasattr(self, "_future"):
+                return self._future
+
+            self._future = self.runner(self._run_inline)
+
             return self._future
-
-        self._future = self.runner(self._run_inline)
-
-        return self._future
 
     async def run_async(self) -> None:
         """
@@ -250,8 +253,9 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
 
     def dispose(self) -> None:
         """Disposes the managed environment and clears the module globals."""
-        self._del_future_refs()
-        self.module.__dict__.clear()
+        with self._lock:
+            self._del_future_refs()
+            self.module.__dict__.clear()
 
         if isinstance(self.environment, ManagedEnvironment):
             self.environment.dispose()
@@ -285,7 +289,8 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
                 exc.__traceback__ = None
                 if isinstance(exc, ExecutionError) and (parent := exc.parent_error):
                     parent.__traceback__ = None
-            del self._future
+            with suppress(AttributeError):
+                del self._future
 
 
 @overload
