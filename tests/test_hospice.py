@@ -10,6 +10,7 @@ import gc
 import logging
 import weakref
 from collections.abc import Generator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -152,5 +153,27 @@ def test_hospice_can_forget_about_cores_safely() -> None:
     del o2
     _mock_timings_registry.clear()
 
+    gc.collect()
+    gc.collect()
+
+
+def test_hospice_concurrent_access() -> None:
+    def worker(i: int) -> None:
+        env = MockEnv()
+        core = MockCore()
+        admit_environment(env, core)  # type:ignore[arg-type]
+        del env
+        if i % 3 == 0:
+            freeze()
+            unfreeze()
+        elif i % 3 == 1:
+            _ = any_alive()
+        else:
+            gc.collect()
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(worker, range(40)))
+
+    _mock_timings_registry.clear()
     gc.collect()
     gc.collect()

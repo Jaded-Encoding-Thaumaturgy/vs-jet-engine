@@ -15,7 +15,7 @@ from vapoursynth import Core, EnvironmentData
 logger = logging.getLogger(__name__)
 
 
-lock = threading.Lock()
+lock = threading.RLock()
 refctr = 0
 refnanny = dict[int, weakref.ReferenceType[EnvironmentData]]()
 cores = dict[int, Core]()
@@ -33,44 +33,48 @@ def admit_environment(environment: EnvironmentData, core: Core) -> None:
     with lock:
         ident = refctr
         refctr += 1
-
-    ref = weakref.ref(environment, lambda _: _add_tostage1(ident))
-    cores[ident] = core
-    refnanny[ident] = ref
+        cores[ident] = core
+        refnanny[ident] = weakref.ref(environment, lambda _: _add_tostage1(ident))
 
     logger.debug("Admitted environment %r and %r as with ID:%s.", environment, core, ident)
 
 
 def any_alive() -> bool:
-    if bool(stage1) or bool(stage2) or bool(stage2_to_add):
+    def is_any() -> bool:
+        with lock:
+            return bool(stage1) or bool(stage2) or bool(stage2_to_add)
+
+    if is_any():
         gc.collect()
-    if bool(stage1) or bool(stage2) or bool(stage2_to_add):
+    if is_any():
         gc.collect()
-    if bool(stage1) or bool(stage2) or bool(stage2_to_add):
+    if is_any():
         gc.collect()
-    return bool(stage1) or bool(stage2) or bool(stage2_to_add)
+    return is_any()
 
 
 def freeze() -> None:
     logger.debug("Freezing the hospice. Cores won't be collected anyore.")
 
-    hold.update(stage1)
-    hold.update(stage2)
-    hold.update(stage2_to_add)
-    stage1.clear()
-    stage2.clear()
-    stage2_to_add.clear()
+    with lock:
+        hold.update(stage1)
+        hold.update(stage2)
+        hold.update(stage2_to_add)
+        stage1.clear()
+        stage2.clear()
+        stage2_to_add.clear()
 
 
 def unfreeze() -> None:
-    stage1.update(hold)
-    hold.clear()
+    with lock:
+        stage1.update(hold)
+        hold.clear()
 
 
 def _is_core_still_used(ident: int) -> bool:
     # There has to be the Core, CoreTimings and the temporary reference as an argument to getrefcount
     # https://docs.python.org/3/library/sys.html#sys.getrefcount
-    return sys.getrefcount(cores[ident]) > 3
+    return False if ident not in cores else sys.getrefcount(cores[ident]) > 3
 
 
 def _add_tostage1(ident: int) -> None:
@@ -95,8 +99,6 @@ def _collectstage1(phase: Literal["start", "stop"], _: dict[str, int]) -> None:
 
 
 def _collectstage2(phase: Literal["start", "stop"], _: dict[str, int]) -> None:
-    global stage2_to_add
-
     if phase != "stop":
         return
 
@@ -108,11 +110,12 @@ def _collectstage2(phase: Literal["start", "stop"], _: dict[str, int]) -> None:
                 continue
 
             stage2.remove(ident)
-            garbage.append(cores.pop(ident))
+            if ident in cores:
+                garbage.append(cores.pop(ident))
             logger.debug("Marking core %r for collection", ident)
 
         stage2.update(stage2_to_add)
-        stage2_to_add = set()
+        stage2_to_add.clear()
 
     garbage.clear()
 
