@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests for the policy environment stores."""
 
+import sys
 from collections.abc import Iterator
 from concurrent import futures
 from contextvars import copy_context
@@ -72,8 +73,10 @@ class TestContextVarStore(BaseStoreTest):
         return ContextVarStore("store_test")
 
     def test_threads_do_not_influence_each_other(self) -> None:
+        expected_initial = 1 if getattr(sys.flags, "thread_inherit_context", 0) else None
+
         def thread() -> None:
-            assert self.store.get_current_environment() is None
+            assert self.store.get_current_environment() == expected_initial
             self.store.set_current_environment(2)  # type: ignore[arg-type]
             assert self.store.get_current_environment() == 2
 
