@@ -9,6 +9,7 @@ import contextlib
 import gc
 import weakref
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import pytest
 import vapoursynth
@@ -155,3 +156,26 @@ class TestManagedEnvironment:
         assert registered_policy.managed.get_current_environment() is None
 
         del env._data
+
+    def test_concurrent_dispose(self, registered_policy: Policy) -> None:
+        env = registered_policy.new_environment()
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futs = [ex.submit(env.dispose) for _ in range(8)]
+            wait(futs)
+
+        assert env.disposed
+
+    def test_nested_inline_sections(self, registered_policy: Policy) -> None:
+        env1 = registered_policy.new_environment()
+        env2 = registered_policy.new_environment()
+
+        try:
+            with env1.inline_section():
+                assert registered_policy.managed.get_current_environment() == env1._data
+                with env2.inline_section():
+                    assert registered_policy.managed.get_current_environment() == env2._data
+                assert registered_policy.managed.get_current_environment() == env1._data
+        finally:
+            env1.dispose()
+            env2.dispose()
