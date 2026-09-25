@@ -9,7 +9,8 @@ import asyncio
 import contextlib
 import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
@@ -982,3 +983,25 @@ async def test_unified_future_add_loop_callback_parent_cancelled() -> None:
 
     assert chained.cancelled() is True
     assert called == [True]
+
+
+def test_concurrent_cancellation_and_resolution() -> None:
+    def race_scenario(_: int) -> None:
+        raw = Future[int]()
+        uf = UnifiedFuture.from_future(raw)
+        ch = uf.then(lambda x: x + 1)
+
+        def resolve() -> None:
+            with suppress(InvalidStateError):
+                raw.set_result(42)
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f1 = ex.submit(uf.cancel)
+            f2 = ex.submit(ch.cancel)
+            f3 = ex.submit(resolve)
+            f1.result()
+            f2.result()
+            f3.result()
+
+    for i in range(30):
+        race_scenario(i)
