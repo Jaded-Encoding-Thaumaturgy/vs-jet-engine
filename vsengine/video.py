@@ -7,7 +7,7 @@
 vsengine.render renders video frames for you.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future
 
 import vapoursynth as vs
@@ -162,19 +162,19 @@ def render(
         )
         yield UnifiedFuture.resolve((0, data.encode("ascii")))
 
-    current_frame = 0
+    def _make_frame_renderer(idx: int) -> Callable[[vs.VideoFrame], tuple[int, bytes]]:
+        def render_single_frame(f: vs.VideoFrame) -> tuple[int, bytes]:
+            buf = list[bytes]()
 
-    def render_single_frame(frame: vs.VideoFrame) -> tuple[int, bytes]:
-        buf = list[bytes]()
+            if y4m:
+                buf.append(b"FRAME\n")
 
-        if y4m:
-            buf.append(b"FRAME\n")
+            for plane in iter(f):
+                buf.append(plane.tobytes())
 
-        for plane in iter(frame):
-            buf.append(bytes(plane))
+            return idx, b"".join(buf)
 
-        return current_frame, b"".join(buf)
+        return render_single_frame
 
-    for frame, fut in enumerate(frames(node, env, prefetch=prefetch, backlog=backlog).futures, 1):
-        current_frame = frame
-        yield UnifiedFuture.from_future(fut).map(render_single_frame)
+    for frame_idx, fut in enumerate(frames(node, env, prefetch=prefetch, backlog=backlog).futures, 1):
+        yield UnifiedFuture.from_future(fut).map(_make_frame_renderer(frame_idx))
