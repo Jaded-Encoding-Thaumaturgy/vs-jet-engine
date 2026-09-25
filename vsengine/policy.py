@@ -120,7 +120,7 @@ class _ManagedPolicy(EnvironmentPolicy):
 
     def __init__(self, store: EnvironmentStore) -> None:
         self._store = store
-        self._mutex = threading.Lock()
+        self._mutex = threading.RLock()
         self._local = threading.local()
 
     # For engine-calls that require vapoursynth but
@@ -128,11 +128,16 @@ class _ManagedPolicy(EnvironmentPolicy):
 
     # Start the section.
     def inline_section_start(self, environment: EnvironmentData) -> None:
-        self._local.environment = environment
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            self._local.stack = stack = []
+        stack.append(environment)
 
     # End the section.
     def inline_section_end(self) -> None:
-        del self._local.environment
+        stack = getattr(self._local, "stack", None)
+        if stack:
+            stack.pop()
 
     @property
     def api(self) -> EnvironmentPolicyAPI:
@@ -153,6 +158,10 @@ class _ManagedPolicy(EnvironmentPolicy):
         # For small segments, allow switching the environment inline.
         # This is useful for vsengine-functions that require access to the
         # vapoursynth api, but don't want to invoke the store for it.
+        stack = getattr(self._local, "stack", None)
+        if stack and self.is_alive(stack[-1]):
+            return stack[-1]
+
         if (env := getattr(self._local, "environment", None)) is not None and self.is_alive(env):
             return env
 
@@ -209,12 +218,13 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
     Represents a VapourSynth environment that is managed by a policy.
     """
 
-    __slots__ = ("_data", "_environment", "_policy")
+    __slots__ = ("_data", "_dispose_lock", "_environment", "_policy")
 
     def __init__(self, environment: Environment, data: EnvironmentData, policy: Policy) -> None:
         self._environment = environment
         self._data = data
         self._policy = policy
+        self._dispose_lock = threading.Lock()
 
     def __enter__(self) -> Self:
         return self
@@ -263,21 +273,24 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
         """
         Disposes of the environment.
         """
-        if self.disposed:
-            return
+        with self._dispose_lock:
+            if self.disposed:
+                return
 
-        logger.debug("Starting disposal of environment: %r", self._data)
+            logger.debug("Starting disposal of environment: %r", self._data)
+            data = self._data
+            core_obj = self.core
+            del self._data
 
-        if self._policy.is_registered and self._policy.managed.is_alive(self._data):
+        if self._policy.is_registered and self._policy.managed.is_alive(data):
             logger.debug("Admitting environment to hospice")
-            admit_environment(self._data, self.core)
+            admit_environment(data, core_obj)
             logger.debug("Destroying environment")
-            self._policy.api.destroy_environment(self._data)
+            self._policy.api.destroy_environment(data)
             logger.debug("Environment destroyed")
         else:
             logger.debug("Environment not registered or not alive, skipping disposal")
 
-        del self._data
         logger.debug("Environment disposed")
 
     @contextmanager
