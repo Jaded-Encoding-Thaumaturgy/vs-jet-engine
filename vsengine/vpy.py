@@ -346,6 +346,11 @@ def load_script(
     """
     Runs the script at the given path.
 
+    Note:
+       Executing scripts modifies process-global interpreter state (`sys.modules`, `sys.path`, and `sys.argv[0]`).
+       When running multiple scripts concurrently across threads, ensure each script uses a distinct `module` name,
+       use a thread-isolated environment store (`ThreadLocalStore` or `ContextVarStore`), and avoid using `chdir`.
+
     :param script: The path to the script file to run.
     :param environment: Defines the environment in which the code should run.
                         If passed a Policy, it will create a new environment from the policy,
@@ -433,6 +438,11 @@ def load_code(
 ) -> Script[Any]:
     """
     Runs the given code snippet.
+
+    Note:
+       Executing scripts modifies process-global interpreter state (`sys.modules`, `sys.path`, and `sys.argv[0]`).
+       When running multiple scripts concurrently across threads, ensure each script uses a distinct `module` name,
+       use a thread-isolated environment store (`ThreadLocalStore` or `ContextVarStore`), and avoid using `chdir`.
 
     :param script: The code to run. Can be a string, bytes, AST, or compiled code.
     :param environment: Defines the environment in which the code should run. If passed a Policy,

@@ -26,7 +26,7 @@ import vapoursynth
 from tests._testutils import BLACKBOARD
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.loops import set_loop
-from vsengine.policy import GlobalStore, ManagedEnvironment, Policy
+from vsengine.policy import GlobalStore, ManagedEnvironment, Policy, ThreadLocalStore
 from vsengine.vpy import (
     ExecutionError,
     Script,
@@ -629,3 +629,16 @@ def test_concurrent_script_run() -> None:
         finally:
             script.dispose()
 
+
+def test_concurrent_script_execution() -> None:
+    with Policy(ThreadLocalStore()) as p:
+
+        def run_one(i: int) -> None:
+            with load_code(f"x = {i}", p, inline=False, module=f"__concurrent_{i}__") as s:
+                s.result()
+                assert s.get_variable("x").result() == i
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futs = [ex.submit(run_one, i) for i in range(8)]
+            for f in futs:
+                f.result()
