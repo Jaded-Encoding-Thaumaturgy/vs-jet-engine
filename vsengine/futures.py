@@ -178,7 +178,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         :return: A UnifiedFuture that resolves to the original future's result once the callback completes
             on the event loop.
         """
-        result = UnifiedFuture[T]()
+        result = type(self)()
 
         def forward_parent(_: Future[Any]) -> None:
             if self.cancelled():
@@ -268,7 +268,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         :param on_loop: If True, execute the callback on the main loop.
         :return: A new `UnifiedFuture` carrying the callback's return value.
         """
-        result = UnifiedFuture[Any]()
+        result = type(self)()
 
         def run_cb(cb: Callable[[Any], Any], v: T | BaseException) -> None:
             if result.cancelled():
@@ -518,7 +518,19 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         """The raw underlying `Iterator[Future[T]]`."""
         return self.future_iterable
 
-    def run_as_completed(self, callback: Callable[[Future[T]], Any]) -> UnifiedFuture[None]:
+    @overload
+    def run_as_completed(self, callback: Callable[[Future[T]], Any]) -> UnifiedFuture[None]: ...
+    @overload
+    def run_as_completed[U: Future[None]](
+        self,
+        callback: Callable[[Future[T]], Any],
+        future_factory: Callable[[], U],
+    ) -> U: ...
+    def run_as_completed(
+        self,
+        callback: Callable[[Future[T]], Any],
+        future_factory: Callable[[], Future[None]] | None = None,
+    ) -> Future[None]:
         """
         Consume the iterator and invoke `callback` for each future as it completes.
 
@@ -536,9 +548,10 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
 
         :param callback: Called for each completed `Future`.
             Return `None` or a truthy value to continue; return a falsy value to stop iteration early.
+        :param future_factory: Future class used to carry the state.
         :return: A `UnifiedFuture` that resolves when iteration is complete.
         """
-        state = UnifiedFuture[None]()
+        state = (future_factory or UnifiedFuture[None])()
 
         def _get_next_future() -> Future[T] | None:
             if state.done():
