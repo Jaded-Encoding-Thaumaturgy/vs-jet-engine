@@ -84,7 +84,21 @@ class AsyncIOLoop(EventLoop):
             else:
                 future.set_result(result)
 
-        loop.create_task(run(), name=getattr(func, "__name__", None), context=contextvars.copy_context())
+        ctx = contextvars.copy_context()
+
+        def schedule() -> None:
+            loop.create_task(run(), name=getattr(func, "__name__", None), context=ctx)
+
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is loop:
+            schedule()
+        else:
+            loop.call_soon_threadsafe(schedule)
+
         return future
 
     def next_cycle(self) -> Future[None]:

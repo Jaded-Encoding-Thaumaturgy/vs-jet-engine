@@ -400,3 +400,55 @@ def test_trio_detach_lifecycle() -> None:
     nursery.cancel_scope.cancel.assert_called_once()
     assert loop._token is None
     assert loop._limiter is None
+
+
+def test_asyncio_to_thread_from_worker_thread() -> None:
+    """Ensure AsyncIOLoop.to_thread is thread-safe and wakes an idle loop."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever)
+    thread.start()
+
+    try:
+        adapter = AsyncIOLoop(loop)
+
+        def worker(a: int, b: int = 0) -> int:
+            return a + b
+
+        fut = adapter.to_thread(worker, 15, b=27)
+        assert fut.result(timeout=1.0) == 42
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join()
+        loop.close()
+
+
+def test_trio_to_thread_from_worker_thread() -> None:
+    """Ensure TrioEventLoop.to_thread can be called from outside the Trio thread."""
+    loop_ref = list[TrioEventLoop]()
+    cancel_scope_ref = list[trio.CancelScope]()
+    ready_evt = threading.Event()
+
+    async def main() -> None:
+        async with trio.open_nursery() as nursery:
+            loop_ref.append(TrioEventLoop(nursery))
+            cancel_scope_ref.append(nursery.cancel_scope)
+            ready_evt.set()
+            await trio.sleep_forever()
+
+    def worker(a: int, b: int = 0) -> int:
+        return a + b
+
+    thread = threading.Thread(target=lambda: trio.run(main))
+    thread.start()
+    ready_evt.wait(timeout=1.0)
+
+    adapter = loop_ref[0]
+
+    try:
+        fut = adapter.to_thread(worker, 15, b=27)
+        assert fut.result(timeout=1.0) == 42
+    finally:
+        if cancel_scope_ref:
+            assert adapter.token
+            adapter.token.run_sync_soon(cancel_scope_ref[0].cancel)
+        thread.join(timeout=1.0)

@@ -94,8 +94,6 @@ class TrioEventLoop(EventLoop):
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         if self.nursery is None:
             raise RuntimeError("Trio nursery is not set.")
-        if self.nursery.cancel_scope.cancel_called:
-            raise RuntimeError("Trio nursery has been cancelled.")
 
         future = Future[R]()
 
@@ -118,10 +116,32 @@ class TrioEventLoop(EventLoop):
                     future.set_exception(Cancelled() if isinstance(e, trio.Cancelled) else e)
                 raise
 
+        name = getattr(func, "__name__", None)
+
+        def start() -> None:
+            if self.nursery is None:
+                raise RuntimeError("Trio nursery is not set.")
+            if self.nursery.cancel_scope.cancel_called:
+                raise RuntimeError("Trio nursery has been cancelled.")
+            try:
+                self.nursery.start_soon(run, name=name)
+            except RuntimeError as e:
+                raise RuntimeError("Trio nursery is closed or cannot start tasks.") from e
+
         try:
-            self.nursery.start_soon(run, name=getattr(func, "__name__", None))
-        except RuntimeError as e:
-            raise RuntimeError("Trio nursery is closed or cannot start tasks.") from e
+            trio_token = trio.lowlevel.current_trio_token()
+        except RuntimeError:
+            trio_token = None
+
+        if trio_token is not None:
+            start()
+        else:
+            if (token := self.token) is None:
+                raise RuntimeError("No running Trio event loop or token is inactive.")
+            try:
+                token.run_sync_soon(start)
+            except (trio.RunFinishedError, trio.ClosedResourceError) as e:
+                raise RuntimeError("Trio nursery is closed or cannot start tasks.") from e
 
         return future
 
