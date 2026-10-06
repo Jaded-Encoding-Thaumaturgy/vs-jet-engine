@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 from __future__ import annotations
 
+__lazy_modules__ = ["asyncio", "traceback"]
+
 import asyncio
 import contextvars
 import traceback

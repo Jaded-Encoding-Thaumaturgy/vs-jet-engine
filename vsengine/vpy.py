@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = ["traceback"]
+
 import ast
 import io
 import os
