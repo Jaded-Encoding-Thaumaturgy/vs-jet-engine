@@ -753,6 +753,24 @@ class ChannelLayout(int):
     def __iter__(self) -> Iterator[AudioChannels]: ...
     def __len__(self) -> int: ...
 
+type _PropValueInputsSingle = int | float | _AnyStr | RawFrame | VideoFrame | AudioFrame
+
+type _PropValueInputsIterable = (
+    _SupportsIter[_IntLike]
+    | _SupportsIter[_FloatLike]
+    | _SupportsIter[_AnyStr]
+    | _SupportsIter[RawFrame]
+    | _SupportsIter[VideoFrame]
+    | _SupportsIter[AudioFrame]
+    | _GetItemIterable[_IntLike]
+    | _GetItemIterable[_FloatLike]
+    | _GetItemIterable[_AnyStr]
+    | _GetItemIterable[RawFrame]
+    | _GetItemIterable[VideoFrame]
+    | _GetItemIterable[AudioFrame]
+)
+type _PropValueInputs = _PropValueInputsSingle | _PropValueInputsIterable
+
 type _PropValue = (
     int
     | float
@@ -761,10 +779,6 @@ type _PropValue = (
     | RawFrame
     | VideoFrame
     | AudioFrame
-    | RawNode
-    | VideoNode
-    | AudioNode
-    | Callable[..., Any]
     | list[int]
     | list[float]
     | list[str]
@@ -772,13 +786,9 @@ type _PropValue = (
     | list[RawFrame]
     | list[VideoFrame]
     | list[AudioFrame]
-    | list[RawNode]
-    | list[VideoNode]
-    | list[AudioNode]
-    | list[Callable[..., Any]]
 )
 
-# Only the _PropValue types are allowed in FrameProps but passing _VSValue is allowed.
+# Only the _PropValue types are allowed in FrameProps but passing _PropValueInputs is allowed.
 # Just keep in mind that _SupportsIter and _GetItemIterable will only yield their keys if they're Mapping-like.
 # Consider storing Mapping-likes as two separate props. One for the keys and one for the values as list.
 class FrameProps(MutableMapping[str, _PropValue]):
@@ -812,17 +822,17 @@ class FrameProps(MutableMapping[str, _PropValue]):
     def __getitem__(self, name: Literal["_Alpha"]) -> VideoFrame: ...
     @overload
     def __getitem__(self, name: str) -> _PropValue: ...
-    def __setitem__(self, name: str, value: _VSValue) -> None: ...
+    def __setitem__(self, name: str, value: _PropValueInputs) -> None: ...
     def __delitem__(self, name: str) -> None: ...
     def __iter__(self) -> Iterator[str]: ...
     def __len__(self) -> int: ...
-    def __setattr__(self, name: str, value: _VSValue) -> None: ...
+    def __setattr__(self, name: str, value: _PropValueInputs) -> None: ...
     def __delattr__(self, name: str) -> None: ...
     def __getattr__(self, name: str) -> _PropValue: ...
     @overload
     def setdefault(self, key: str, default: Literal[0] = 0, /) -> _PropValue | Literal[0]: ...
     @overload
-    def setdefault(self, key: str, default: _VSValue, /) -> _PropValue: ...  # pyright: ignore[reportIncompatibleMethodOverride]
+    def setdefault(self, key: str, default: _PropValueInputs, /) -> _PropValue: ...  # pyright: ignore[reportIncompatibleMethodOverride]
     def copy(self) -> dict[str, _PropValue]: ...
     @overload  # type: ignore[override]
     def get(
@@ -1605,6 +1615,8 @@ class RawFrame:
     def props(self, new_props: _SupportsKeysAndGetItem[str, _VSValue]) -> None: ...
     @property
     def readonly(self) -> bool: ...
+    @property
+    def gpu_resident(self) -> bool: ...
     def copy(self) -> Self: ...
     def close(self) -> None: ...
     def get_write_ptr(self, plane: _IntLike) -> c_void_p: ...
@@ -1644,6 +1656,8 @@ class RawNode:
     def __mul__(self, other: int) -> Self: ...
     def __getattr__(self, name: str) -> Plugin: ...
     @property
+    def gpu_resident(self) -> bool: ...
+    @property
     def node_name(self) -> str: ...
     @property
     def timings(self) -> int: ...
@@ -1667,7 +1681,11 @@ class RawNode:
     @overload
     def get_frame_async(self, n: _IntLike, cb: Callable[[RawFrame | None, Exception | None], None]) -> None: ...
     def frames(
-        self, prefetch: int | None = None, backlog: int | None = None, close: bool = False
+        self,
+        prefetch: int | None = None,
+        backlog: int | None = None,
+        close: bool = False,
+        collect_garbage: bool = True,
     ) -> Iterator[RawFrame]: ...
     def set_output(self, index: _IntLike = 0) -> None: ...
     def clear_cache(self) -> None: ...
@@ -1693,7 +1711,11 @@ class VideoNode(RawNode):
         self, n: _IntLike, cb: Callable[[VideoFrame | None, Exception | None], None]
     ) -> None: ...
     def frames(
-        self, prefetch: int | None = None, backlog: int | None = None, close: bool = False
+        self,
+        prefetch: int | None = None,
+        backlog: int | None = None,
+        close: bool = False,
+        collect_garbage: bool = True,
     ) -> Iterator[VideoFrame]: ...
     def set_output(self, index: _IntLike = 0, alpha: Self | None = None, alt_output: Literal[0, 1, 2] = 0) -> None: ...
     def output(
@@ -1740,7 +1762,11 @@ class AudioNode(RawNode):
         self, n: _IntLike, cb: Callable[[AudioFrame | None, Exception | None], None]
     ) -> None: ...
     def frames(
-        self, prefetch: int | None = None, backlog: int | None = None, close: bool = False
+        self,
+        prefetch: int | None = None,
+        backlog: int | None = None,
+        close: bool = False,
+        collect_garbage: bool = True,
     ) -> Iterator[AudioFrame]: ...
     def output(
         self,
@@ -1758,6 +1784,27 @@ class AudioNode(RawNode):
     """VapourSynth Core Functions"""
 # </attribute/AudioNode_bound/std>
 # </plugins/bound/AudioNode>
+
+class _VulkanDeviceEntry(TypedDict):
+    index: int
+    name: str
+    api_version: tuple[int, int, int]
+    type: str
+    device_memory: int
+    usable: bool
+    reason: str
+    uuid: str
+
+class _VulkanDeviceInfo(TypedDict):
+    name: str
+    device_memory: int
+    budget: int
+    allocated: int
+    limit: int
+    uuid: str
+    export_handle_type: int
+    semaphore_export_handle_type: int
+    unified_memory: bool
 
 class Core:
     timings: Final[CoreTimings]
@@ -1780,7 +1827,16 @@ class Core:
     @property
     def used_cache_size(self) -> int: ...
     @property
+    def max_vram_cache_size(self) -> int: ...
+    @max_vram_cache_size.setter
+    def max_vram_cache_size(self, mb: int) -> None: ...
+    @property
     def flags(self) -> int: ...
+    @property
+    def vulkan_device_info(self) -> _VulkanDeviceInfo: ...
+    @property
+    def vulkan_devices(self) -> list[_VulkanDeviceEntry]: ...
+    def set_vulkan_device(self, index: int = -1) -> None: ...
     def plugins(self) -> Iterator[Plugin]: ...
     def query_video_format(
         self,
@@ -1893,7 +1949,7 @@ class _std:
             @_Wrapper.Function
             def AssumeSampleRate(self, /, clip: AudioNode, src: AudioNode | None = None, samplerate: _IntLike | None = None) -> AudioNode: ...
             @_Wrapper.Function
-            def AudioGain(self, /, clip: AudioNode, gain: _FloatLike | _SequenceLike[_FloatLike] | None = None, overflow_error: _IntLike | None = None) -> AudioNode: ...
+            def AudioGain(self, /, clip: AudioNode, gain: _FloatLike | _SequenceLike[_FloatLike], overflow_error: _IntLike | None = None) -> AudioNode: ...
             @_Wrapper.Function
             def AudioLoop(self, /, clip: AudioNode, times: _IntLike | None = None) -> AudioNode: ...
             @_Wrapper.Function
@@ -2193,7 +2249,7 @@ class _std:
             @_Wrapper.Function
             def AssumeSampleRate(self, /, src: AudioNode | None = None, samplerate: _IntLike | None = None) -> AudioNode: ...
             @_Wrapper.Function
-            def AudioGain(self, /, gain: _FloatLike | _SequenceLike[_FloatLike] | None = None, overflow_error: _IntLike | None = None) -> AudioNode: ...
+            def AudioGain(self, /, gain: _FloatLike | _SequenceLike[_FloatLike], overflow_error: _IntLike | None = None) -> AudioNode: ...
             @_Wrapper.Function
             def AudioLoop(self, /, times: _IntLike | None = None) -> AudioNode: ...
             @_Wrapper.Function
