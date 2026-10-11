@@ -19,6 +19,7 @@ import traceback
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
 from contextlib import AbstractContextManager, nullcontext, suppress
+from importlib.machinery import ModuleSpec, SourceFileLoader
 from types import CodeType, ModuleType, TracebackType
 from typing import Any, Concatenate, Self, overload
 from uuid import uuid4
@@ -143,16 +144,32 @@ class _ModifiedArgv0(AbstractContextManager[None]):
 
 
 def _set_module_dunders(module: ModuleType, filename: str) -> None:
-    for key, value in {
+    dunders: dict[str, Any] = {
         "__name__": module.__name__,
         "__file__": filename,
         "__cached__": None,
-        "__doc__": None,
-        "__loader__": None,
-        "__package__": None,
-        "__spec__": None,
-    }.items():
-        module.__dict__.setdefault(key, value)
+        "__doc__": getattr(module, "__doc__", None),
+        "__package__": getattr(module, "__package__", None),
+    }
+
+    if os.path.isfile(filename):
+        loader = SourceFileLoader(module.__name__, filename)
+        spec = ModuleSpec(module.__name__, loader, origin=filename)
+        dunders["__spec__"] = spec
+        dunders["__loader__"] = loader
+        dunders["__cached__"] = spec.cached
+    else:
+        # Strip the default None values added by ModuleType
+        if module.__dict__.get("__spec__") is None:
+            module.__dict__.pop("__spec__", None)
+        if module.__dict__.get("__loader__") is None:
+            module.__dict__.pop("__loader__", None)
+
+    for key, value in dunders.items():
+        if module.__dict__.get(key) is None:
+            module.__dict__[key] = value
+        else:
+            module.__dict__.setdefault(key, value)
 
 
 def inline_runner[T](func: Callable[[], T]) -> Future[T]:
