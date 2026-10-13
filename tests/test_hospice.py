@@ -23,34 +23,16 @@ from vsengine._hospice import admit_environment, any_alive, freeze, unfreeze
 @pytest.fixture(autouse=True)
 def reset_mock_registry() -> Generator[None]:
     """Reset the mock timings registry before each test."""
-    _mock_timings_registry.clear()
+    mock_timings_registry.clear()
     try:
         yield
     finally:
-        _mock_timings_registry.clear()
+        mock_timings_registry.clear()
 
 
 # Global registry to simulate CoreTimings holding references to cores
 # This adds the extra reference needed for the > 3 refcount check
-_mock_timings_registry = list[Any]()
-
-
-class MockCore:
-    """
-    Mock Core object that simulates the CoreTimings reference behavior.
-
-    Real VapourSynth Core has a CoreTimings object that holds a reference to it,
-    so getrefcount(core) is at least 3:
-    - 1 from cores dict in hospice
-    - 1 from CoreTimings
-    - 1 from getrefcount() temporary
-
-    We simulate this by registering each MockCore in a global registry.
-    """
-
-    def __init__(self) -> None:
-        # Register self to simulate CoreTimings reference
-        _mock_timings_registry.append(self)
+mock_timings_registry = list[Any]()
 
 
 @pytest.fixture
@@ -60,7 +42,12 @@ def fake_data_factory(mocker: MockerFixture) -> Callable[[], EnvironmentData]:
 
 @pytest.fixture
 def fake_core_factory(mocker: MockerFixture) -> Callable[[], Core]:
-    return lambda: mocker.Mock(spec=Core, wraps=MockCore)
+    def factory() -> Core:
+        mock = mocker.Mock(spec=Core)
+        mock_timings_registry.append(mock)
+        return mock
+
+    return factory
 
 
 @contextlib.contextmanager
@@ -87,7 +74,7 @@ def test_hospice_delays_connection(
     del o1
 
     # Clear the mock registry to release the "CoreTimings" reference
-    _mock_timings_registry.clear()
+    mock_timings_registry.clear()
 
     assert o2_r() is not None
 
@@ -116,7 +103,6 @@ def test_hospice_is_delayed_on_alive_objects(
     # o2 is still held by local var AND registry, so refcount > 3
     with caplog.at_level(logging.WARNING, logger="vsengine._hospice"):
         gc.collect()
-        gc.collect()
 
     assert len(caplog.records) > 0
 
@@ -125,7 +111,7 @@ def test_hospice_is_delayed_on_alive_objects(
     assert o2r() is not None
 
     # Now clear registry to allow collection
-    _mock_timings_registry.clear()
+    mock_timings_registry.clear()
 
     gc.collect()
     gc.collect()
@@ -151,7 +137,7 @@ def test_hospice_reports_alive_objects_correctly(
     del o2
 
     # Now clear the registry to allow collection
-    _mock_timings_registry.clear()
+    mock_timings_registry.clear()
 
     assert not any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true."
 
@@ -174,9 +160,8 @@ def test_hospice_can_forget_about_cores_safely(
     with hide_logs():
         assert any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true."
     del o2
-    _mock_timings_registry.clear()
+    mock_timings_registry.clear()
 
-    gc.collect()
     gc.collect()
 
 
@@ -200,6 +185,5 @@ def test_hospice_concurrent_access(
     with ThreadPoolExecutor(max_workers=8) as ex:
         list(ex.map(worker, range(40)))
 
-    _mock_timings_registry.clear()
-    gc.collect()
+    mock_timings_registry.clear()
     gc.collect()

@@ -18,8 +18,9 @@ import threading
 import traceback
 from collections.abc import Awaitable, Buffer, Callable, Generator
 from concurrent.futures import Future
-from contextlib import AbstractContextManager, nullcontext, suppress
+from contextlib import AbstractContextManager, chdir, nullcontext, suppress
 from importlib.machinery import ModuleSpec, SourceFileLoader
+from pathlib import Path
 from types import CodeType, ModuleType, TracebackType
 from typing import Any, Self, overload
 from uuid import uuid4
@@ -33,7 +34,6 @@ from .policy import ManagedEnvironment, Policy
 __all__ = ["ExecutionError", "Script", "load_code", "load_script"]
 
 type Runner[R] = Callable[[Callable[[], R]], Future[R]]
-type Executor[T] = Callable[[WrapAllErrors, ModuleType], T]
 
 
 class ExecutionError(Exception):
@@ -73,6 +73,8 @@ class WrapAllErrors(AbstractContextManager[None]):
     def __enter__(self) -> None: ...
 
     def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
+        if isinstance(val, ExecutionError):
+            raise val
         if val is not None:
             raise ExecutionError(val) from None
 
@@ -219,11 +221,24 @@ _missing = object()
 class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager["Script[EnvT]"], Awaitable[None]):
     """VapourSynth script wrapper."""
 
-    def __init__(self, executor: Executor[None], module: ModuleType, environment: EnvT, runner: Runner[None]) -> None:
-        self.executor = executor
-        self.environment: EnvT = environment
-        self.runner = runner
+    def __init__(
+        self,
+        code: CodeType,
+        environment: EnvT,
+        module: ModuleType,
+        filename: str,
+        *,
+        inline: bool = True,
+        chdir: str | os.PathLike[str] | None = None,
+        path: str | os.PathLike[str] | None = None,
+    ) -> None:
+        self.code = code
         self.module = module
+        self.environment = environment
+        self.filename = filename
+        self.inline = inline
+        self.chdir = chdir
+        self.path = Path(path).absolute() if path is not None else None
         self._lock = threading.Lock()
 
     def __enter__(self) -> Self:
@@ -246,13 +261,14 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
         It returns a future which completes when the script completes.
         When the script fails, it raises a ExecutionError.
         """
-        self._future: Future[None]
-
         with self._lock:
             if hasattr(self, "_future"):
                 return self._future
 
-            self._future = self.runner(self._run_inline)
+            if self.inline:
+                self._future = inline_runner(self._run_inline)
+            else:
+                self._future = to_thread(self._run_inline)
 
             return self._future
 
@@ -297,8 +313,17 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
         )
 
     def _run_inline(self) -> None:
-        with self.environment.use():
-            self.executor(WrapAllErrors(), self.module)
+        with (
+            WrapAllErrors(),
+            self.environment.use(),
+            chdir(self.chdir) if self.chdir is not None else nullcontext(),
+            _TempModule(self.module.__name__, self.module),
+            _ModifiedPath(self.path) if self.path is not None else nullcontext(),
+            _ModifiedArgv0(self.filename) if (self.filename is not None and self.path is not None) else nullcontext(),
+        ):
+            _set_module_dunders(self.module, self.filename)
+
+            exec(self.code, self.module.__dict__, self.module.__dict__)  # noqa: S102
 
     def _del_future_refs(self) -> None:
         if (fut := getattr(self, "_future", None)) is not None:
@@ -380,22 +405,18 @@ def load_script(
     """
     rscript = os.path.abspath(os.path.normpath(str(script)))
 
-    def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
-        path = os.path.dirname(rscript)
+    with io.open_code(rscript) as f:
+        code = compile(f.read(), filename=rscript, dont_inherit=True, flags=0, mode="exec")
 
-        with (
-            ctx,
-            _TempModule(module.__name__, module),
-            _ModifiedPath(path),
-            _ModifiedArgv0(rscript),
-            io.open_code(rscript) as f,
-        ):
-            _set_module_dunders(module, rscript)
-
-            code = compile(f.read(), filename=rscript, dont_inherit=True, flags=0, mode="exec")
-            exec(code, module.__dict__, module.__dict__)  # noqa: S102
-
-    return _load(_execute, environment, module, inline, chdir)
+    return _load(
+        code=code,
+        environment=environment,
+        filename=rscript,
+        module=module,
+        inline=inline,
+        chdir=chdir,
+        path=os.path.dirname(rscript),
+    )
 
 
 @overload
@@ -473,45 +494,43 @@ def load_code(
     :returns: A script object. The script starts running when you call run() on it, or await it.
     :kwargs: Arguments to pass to compile().
     """
-    if "filename" in kwargs:
-        kwargs["filename"] = os.path.abspath(os.path.normpath(str(kwargs["filename"])))
+    filename = kwargs.pop("filename", None)
+    if filename is not None:
+        filename = os.path.abspath(os.path.normpath(str(filename)))
+    else:
+        filename = f"<runvpy {uuid4().hex[:8]}>"
 
-    def _execute(ctx: WrapAllErrors, module: ModuleType) -> None:
-        filename = kwargs.pop("filename", f"<runvpy {uuid4().hex[:8]}>")
-        path = os.path.dirname(filename) if os.path.exists(filename) else None
+    path = os.path.dirname(filename) if os.path.exists(filename) else None
 
-        with (
-            ctx,
-            _TempModule(module.__name__, module),
-            _ModifiedPath(path) if path else nullcontext(),
-            _ModifiedArgv0(filename) if path else nullcontext(),
-        ):
-            nkwargs: dict[str, Any] = {"filename": filename, "dont_inherit": True, "flags": 0, "mode": "exec"} | kwargs
-            code = compile(script, **nkwargs) if not isinstance(script, CodeType) else script
+    nkwargs: dict[str, Any] = {"filename": filename, "dont_inherit": True, "flags": 0, "mode": "exec"} | kwargs
+    code = compile(script, **nkwargs) if not isinstance(script, CodeType) else script
 
-            _set_module_dunders(module, filename)
-            exec(code, module.__dict__, module.__dict__)  # noqa: S102
-
-    return _load(_execute, environment, module, inline, chdir)
+    return _load(
+        code=code,
+        environment=environment,
+        filename=filename,
+        module=module,
+        inline=inline,
+        chdir=chdir,
+        path=path,
+    )
 
 
 def _load(
-    executor: Executor[None],
+    code: CodeType,
     environment: Policy
     | vs.Environment
     | ManagedEnvironment
     | Script[vs.Environment]
     | Script[ManagedEnvironment]
     | None,
+    filename: str,
     module: str | ModuleType,
-    inline: bool,
-    chdir: str | os.PathLike[str] | None,
+    inline: bool = True,
+    chdir: str | os.PathLike[str] | None = None,
+    *,
+    path: str | os.PathLike[str] | None = None,
 ) -> Script[Any]:
-    runner = inline_runner if inline else to_thread
-
-    if chdir is not None:
-        runner = chdir_runner(chdir, runner)
-
     if isinstance(environment, Script):
         module = environment.module
         environment = environment.environment
@@ -520,9 +539,15 @@ def _load(
 
     if environment is None:
         environment = vs.get_current_environment()
-    elif isinstance(environment, vs.Environment):
-        return Script(executor, module, environment, runner)
     elif isinstance(environment, Policy):
         environment = environment.new_environment()
 
-    return Script[Any](executor, module, environment, runner)
+    return Script[Any](
+        code=code,
+        module=module,
+        environment=environment,
+        filename=filename,
+        inline=inline,
+        chdir=chdir,
+        path=path,
+    )

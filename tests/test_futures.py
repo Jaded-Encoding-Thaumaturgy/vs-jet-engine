@@ -11,7 +11,7 @@ import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Literal, override
+from typing import TYPE_CHECKING, Any, Literal, Self, override
 
 import pytest
 
@@ -407,12 +407,14 @@ def test_unified_iterator_run_as_completed_requests_as_needed() -> None:
 def test_unified_iterator_run_as_completed_cancels_on_iterator_crash() -> None:
     err = RuntimeError("test")
 
-    def it() -> Iterator[Future[int]]:
-        raise err
+    class It:
+        def __iter__(self) -> Self:
+            return self
 
-    def noop(_: Future[int]) -> None: ...
+        def __next__(self) -> Future[int]:
+            raise err
 
-    state = UnifiedIterator(it()).run_as_completed(noop)
+    state = UnifiedIterator(It()).run_as_completed(lambda _: None)
     assert state.done()
     assert state.exception() is err
 
