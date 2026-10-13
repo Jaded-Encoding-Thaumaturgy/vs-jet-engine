@@ -16,7 +16,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Itera
 from concurrent.futures import CancelledError, Future, InvalidStateError
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, suppress
 from functools import wraps
-from inspect import isgeneratorfunction
 from types import TracebackType
 from typing import Any, Literal, Protocol, Self, overload
 
@@ -702,7 +701,7 @@ def unified[U: UnifiedFuture[Any]](
 # Implementation
 def unified[T, **P](
     *,
-    kind: str = "auto",
+    kind: Literal["future", "generator"],
     iterable_class: type[UnifiedIterator[Any]] = UnifiedIterator[Any],
     future_class: type[UnifiedFuture[Any]] = UnifiedFuture[Any],
 ) -> Any:
@@ -711,11 +710,6 @@ def unified[T, **P](
     into functions that return `UnifiedFuture` or `UnifiedIterator`.
 
     :param kind: Controls which wrapper is applied.
-
-        `"auto"` (default)
-            Automatically detects generator functions (via `isgeneratorfunction`)
-            and wraps them as `UnifiedIterator`; all other callables are wrapped as
-            `UnifiedFuture`.
 
         `"future"`
             Always wrap as `UnifiedFuture`.
@@ -758,10 +752,6 @@ def unified[T, **P](
     def decorator(
         func: Callable[P, Iterator[Future[T]]] | Callable[P, Future[T]],
     ) -> Callable[P, UnifiedIterator[T]] | Callable[P, UnifiedFuture[T]]:
-        if kind == "auto":
-            # pyrefly: ignore [bad-argument-type]
-            return _decorator_generator(func) if isgeneratorfunction(func) else _decorator_future(func)
-
         if kind == "generator":
             # pyrefly: ignore [bad-argument-type]
             return _decorator_generator(func)
