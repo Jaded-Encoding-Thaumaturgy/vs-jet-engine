@@ -562,7 +562,7 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
                 return None
 
             try:
-                next_future = self.future_iterable.__next__()
+                next_future = next(self.future_iterable)
             except StopIteration:
                 state.set_result(None)
                 return None
@@ -640,15 +640,14 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         return self
 
     def __next__(self) -> T:
-        fut = self.future_iterable.__next__()
-        return fut.result()
+        return next(self.future_iterable).result()
 
     def __aiter__(self) -> Self:
         return self
 
     async def __anext__(self) -> T:
         try:
-            fut = self.future_iterable.__next__()
+            fut = next(self.future_iterable)
         except StopIteration:
             raise StopAsyncIteration
         return await get_loop().await_future(fut)
