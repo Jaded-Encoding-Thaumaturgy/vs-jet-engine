@@ -191,30 +191,6 @@ def inline_runner[T](func: Callable[[], T]) -> Future[T]:
     return fut
 
 
-def chdir_runner[R](dir: str | os.PathLike[str], parent: Runner[R]) -> Callable[[Callable[[], R]], Future[R]]:
-    """
-    Wraps a runner to change the current working directory during execution.
-
-    :param dir: The directory to change to.
-    :param parent: The runner to wrap.
-    :return: A wrapped runner function.
-    """
-
-    def runner(func: Callable[[], R]) -> Future[R]:
-        def wrapped() -> R:
-            current = os.getcwd()
-            os.chdir(dir)
-
-            try:
-                return func()
-            finally:
-                os.chdir(current)
-
-        return parent(wrapped)
-
-    return runner
-
-
 _missing = object()
 
 

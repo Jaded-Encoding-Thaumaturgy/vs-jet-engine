@@ -28,17 +28,7 @@ from tests._testutils import BLACKBOARD
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.loops import NO_LOOP, set_loop
 from vsengine.policy import ManagedEnvironment, Policy, ThreadLocalStore
-from vsengine.vpy import (
-    ExecutionError,
-    Script,
-    WrapAllErrors,
-    _ModifiedArgv0,
-    _ModifiedPath,
-    chdir_runner,
-    inline_runner,
-    load_code,
-    load_script,
-)
+from vsengine.vpy import ExecutionError, Script, WrapAllErrors, _ModifiedArgv0, _ModifiedPath, load_code, load_script
 
 DIR: str = os.path.dirname(__file__)
 PATH: str = os.path.join(DIR, "fixtures", "test.vpy")
@@ -185,28 +175,6 @@ def test_disposing_context_manager_for_managed_environments() -> None:
         except Exception:
             env.dispose()
             raise
-
-
-def test_chdir_changes_chdir() -> None:
-    curdir: str | None = None
-
-    def test_code() -> None:
-        nonlocal curdir
-        curdir = os.getcwd()
-
-    wrapped = chdir_runner(DIR, inline_runner)
-    wrapped(test_code)
-    assert curdir == DIR
-
-
-def test_chdir_changes_chdir_back() -> None:
-    def test_code() -> None: ...
-
-    wrapped = chdir_runner(DIR, inline_runner)
-
-    before = os.getcwd()
-    wrapped(test_code)
-    assert os.getcwd() == before
 
 
 def test_load_uses_current_environment() -> None:
@@ -552,17 +520,6 @@ def test_load_script_adds_to_path(tmp_path: Path) -> None:
         load_script(script_path).result()
 
     assert BLACKBOARD["module_val"] == 42
-
-
-def test_chdir_runner_on_error() -> None:
-    def fail() -> None:
-        raise ValueError("test_error")
-
-    wrapped = chdir_runner(DIR, inline_runner)
-    before = os.getcwd()
-    fut = wrapped(fail)
-    assert isinstance(fut.exception(), ValueError)
-    assert os.getcwd() == before
 
 
 def test_script_get_variable() -> None:
