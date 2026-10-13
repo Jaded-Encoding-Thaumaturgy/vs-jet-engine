@@ -9,21 +9,25 @@ import contextlib
 import gc
 import logging
 import weakref
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
+from pytest_mock import MockerFixture
+from vapoursynth import Core, EnvironmentData
 
 from vsengine._hospice import admit_environment, any_alive, freeze, unfreeze
 
 
 @pytest.fixture(autouse=True)
-def reset_mock_registry() -> Iterator[None]:
+def reset_mock_registry() -> Generator[None]:
     """Reset the mock timings registry before each test."""
     _mock_timings_registry.clear()
-    yield
-    _mock_timings_registry.clear()
+    try:
+        yield
+    finally:
+        _mock_timings_registry.clear()
 
 
 # Global registry to simulate CoreTimings holding references to cores
@@ -49,8 +53,14 @@ class MockCore:
         _mock_timings_registry.append(self)
 
 
-class MockEnv:
-    """Mock EnvironmentData object."""
+@pytest.fixture
+def fake_data_factory(mocker: MockerFixture) -> Callable[[], EnvironmentData]:
+    return lambda: mocker.Mock(spec=EnvironmentData)
+
+
+@pytest.fixture
+def fake_core_factory(mocker: MockerFixture) -> Callable[[], Core]:
+    return lambda: mocker.Mock(spec=Core, wraps=MockCore)
 
 
 @contextlib.contextmanager
@@ -62,12 +72,15 @@ def hide_logs() -> Generator[None]:
         logging.disable(logging.NOTSET)
 
 
-def test_hospice_delays_connection() -> None:
-    o1 = MockEnv()
-    o2 = MockCore()
-    o2r = weakref.ref(o2)
+def test_hospice_delays_connection(
+    fake_data_factory: Callable[[], EnvironmentData],
+    fake_core_factory: Callable[[], Core],
+) -> None:
+    o1 = fake_data_factory()
+    o2 = fake_core_factory()
+    o2_r = weakref.ref(o2)
 
-    admit_environment(o1, o2)  # type:ignore[arg-type]
+    admit_environment(o1, o2)
 
     # Remove local ref to o2, but registry still holds it
     del o2
@@ -76,24 +89,28 @@ def test_hospice_delays_connection() -> None:
     # Clear the mock registry to release the "CoreTimings" reference
     _mock_timings_registry.clear()
 
-    assert o2r() is not None
+    assert o2_r() is not None
 
     gc.collect()
-    assert o2r() is not None
+    assert o2_r() is not None
 
     # Stage-2 add-queue + Stage 2 proper
     gc.collect()
     gc.collect()
 
-    assert o2r() is None
+    assert o2_r() is None
 
 
-def test_hospice_is_delayed_on_alive_objects(caplog: pytest.LogCaptureFixture) -> None:
-    o1 = MockEnv()
-    o2 = MockCore()
+def test_hospice_is_delayed_on_alive_objects(
+    caplog: pytest.LogCaptureFixture,
+    fake_data_factory: Callable[[], EnvironmentData],
+    fake_core_factory: Callable[[], Core],
+) -> None:
+    o1 = fake_data_factory()
+    o2 = fake_core_factory()
     o2r = weakref.ref(o2)
 
-    admit_environment(o1, o2)  # type:ignore[arg-type]
+    admit_environment(o1, o2)
     del o1
 
     # o2 is still held by local var AND registry, so refcount > 3
@@ -117,10 +134,13 @@ def test_hospice_is_delayed_on_alive_objects(caplog: pytest.LogCaptureFixture) -
     assert o2r() is None
 
 
-def test_hospice_reports_alive_objects_correctly() -> None:
-    o1 = MockEnv()
-    o2 = MockCore()
-    admit_environment(o1, o2)  # type:ignore[arg-type]
+def test_hospice_reports_alive_objects_correctly(
+    fake_data_factory: Callable[[], EnvironmentData],
+    fake_core_factory: Callable[[], Core],
+) -> None:
+    o1 = fake_data_factory()
+    o2 = fake_core_factory()
+    admit_environment(o1, o2)
     del o1
 
     # o2 is still alive (local var + registry)
@@ -136,10 +156,13 @@ def test_hospice_reports_alive_objects_correctly() -> None:
     assert not any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true."
 
 
-def test_hospice_can_forget_about_cores_safely() -> None:
-    o1 = MockEnv()
-    o2 = MockCore()
-    admit_environment(o1, o2)  # type:ignore[arg-type]
+def test_hospice_can_forget_about_cores_safely(
+    fake_data_factory: Callable[[], EnvironmentData],
+    fake_core_factory: Callable[[], Core],
+) -> None:
+    o1 = fake_data_factory()
+    o2 = fake_core_factory()
+    admit_environment(o1, o2)
     del o1
 
     with hide_logs():
@@ -157,11 +180,14 @@ def test_hospice_can_forget_about_cores_safely() -> None:
     gc.collect()
 
 
-def test_hospice_concurrent_access() -> None:
+def test_hospice_concurrent_access(
+    fake_data_factory: Callable[[], EnvironmentData],
+    fake_core_factory: Callable[[], Core],
+) -> None:
     def worker(i: int) -> None:
-        env = MockEnv()
-        core = MockCore()
-        admit_environment(env, core)  # type:ignore[arg-type]
+        env = fake_data_factory()
+        core = fake_core_factory()
+        admit_environment(env, core)
         del env
         if i % 3 == 0:
             freeze()

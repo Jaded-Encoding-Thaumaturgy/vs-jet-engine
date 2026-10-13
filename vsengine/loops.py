@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable, Generator
 from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager
 from functools import wraps
+from typing import override
 
 import vapoursynth as vs
 
@@ -156,6 +157,7 @@ class _NoEventLoop(EventLoop):
             fut.set_result(result)
         return fut
 
+    @override
     def next_cycle(self) -> Future[None]:
         return DONE
 

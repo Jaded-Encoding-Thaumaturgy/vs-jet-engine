@@ -8,22 +8,26 @@
 import contextlib
 import gc
 import weakref
-from collections.abc import Iterator
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import suppress
 
 import pytest
 import vapoursynth
+from pytest_mock import MockerFixture
 
 from vsengine.policy import GlobalStore, Policy
 
 
 @pytest.fixture
-def policy() -> Iterator[Policy]:
+def policy() -> Generator[Policy]:
     """Fixture that provides a fresh Policy instance."""
     p = Policy(GlobalStore())
-    yield p
-    with contextlib.suppress(RuntimeError):
-        p.unregister()
+    try:
+        yield p
+    finally:
+        with contextlib.suppress(RuntimeError):
+            p.unregister()
 
 
 class TestPolicy:
@@ -52,11 +56,8 @@ class TestPolicy:
             policy.api.create_environment()
 
     def test_context_manager_on_error(self, policy: Policy) -> None:
-        try:
-            with policy:
-                raise RuntimeError()
-        except RuntimeError:
-            pass
+        with suppress(RuntimeError), policy:
+            raise RuntimeError
 
         with pytest.raises(RuntimeError):
             policy.api.create_environment()
@@ -70,7 +71,7 @@ class TestManagedEnvironment:
         return GlobalStore()
 
     @pytest.fixture
-    def registered_policy(self, store: GlobalStore) -> Iterator[Policy]:
+    def registered_policy(self, store: GlobalStore) -> Generator[Policy]:
         with Policy(store) as p:
             yield p
 
@@ -130,12 +131,10 @@ class TestManagedEnvironment:
             assert vapoursynth.get_current_environment() == env1.vs_environment
             assert env_before == store.get_current_environment()
 
-    def test_dead_environment_reference(self, registered_policy: Policy) -> None:
-        class Dummy: ...
-
-        d = Dummy()
-        registered_policy.managed._store.set_current_environment(weakref.ref(d))  # type: ignore[arg-type]
-        del d
+    def test_dead_environment_reference(self, registered_policy: Policy, mocker: MockerFixture) -> None:
+        mock_data = mocker.Mock(spec=vapoursynth.EnvironmentData)
+        registered_policy.managed._store.set_current_environment(weakref.ref(mock_data))
+        del mock_data
         gc.collect()
 
         assert registered_policy.managed.get_current_environment() is None

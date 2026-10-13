@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests for the video module."""
 
-from collections.abc import Iterator
 from concurrent.futures import Future
 
 import pytest
@@ -19,10 +18,9 @@ AnyFormat = PresetVideoFormat | VideoFormat
 
 
 @pytest.fixture(autouse=True)
-def standalone_policy() -> Iterator[None]:
+def standalone_policy() -> None:
     """Set up a standalone policy for video tests."""
     use_standalone_policy()
-    yield
 
 
 def generate_video(length: int = 3, width: int = 1, height: int = 1, format: AnyFormat = GRAY8) -> VideoNode:
@@ -34,8 +32,7 @@ def generate_video(length: int = 3, width: int = 1, height: int = 1, format: Any
         fout.props["FrameNumber"] = n
         return fout
 
-    clip = core.std.ModifyFrame(clip=clip, clips=clip, selector=_add_frameno)
-    return clip
+    return core.std.ModifyFrame(clip=clip, clips=clip, selector=_add_frameno)
 
 
 def test_planes() -> None:

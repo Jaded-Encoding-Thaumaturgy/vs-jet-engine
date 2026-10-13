@@ -7,17 +7,17 @@
 Global pytest configuration and fixtures for vs-engine tests.
 """
 
-from collections.abc import Iterator
+from collections.abc import Generator
 
 import pytest
 
 from tests._testutils import forcefully_unregister_policy
-from vsengine import _hospice
+from vsengine import _hospice as hospice
 from vsengine.loops import NO_LOOP, set_loop
 
 
 @pytest.fixture(autouse=True)
-def clean_policy() -> Iterator[None]:
+def clean_policy() -> Generator[None]:
     """
     Global fixture that runs before and after every test.
 
@@ -27,24 +27,29 @@ def clean_policy() -> Iterator[None]:
     - Resetting the event loop to NO_LOOP after the test
     """
     forcefully_unregister_policy()
-    yield
-    forcefully_unregister_policy()
-    set_loop(NO_LOOP)
+    try:
+        yield
+    finally:
+        forcefully_unregister_policy()
+        set_loop(NO_LOOP)
 
 
 @pytest.fixture(autouse=True)
-def reset_hospice_state() -> Iterator[None]:
+def reset_hospice_state() -> Generator[None]:
     """Reset hospice module state before each test to ensure isolation."""
-    _hospice.stage1.clear()
-    _hospice.stage2.clear()
-    _hospice.stage2_to_add.clear()
-    _hospice.hold.clear()
-    _hospice.cores.clear()
-    _hospice.refnanny.clear()
-    yield
-    _hospice.stage1.clear()
-    _hospice.stage2.clear()
-    _hospice.stage2_to_add.clear()
-    _hospice.hold.clear()
-    _hospice.cores.clear()
-    _hospice.refnanny.clear()
+    hospice.stage1.clear()
+    hospice.stage2.clear()
+    hospice.stage2_to_add.clear()
+    hospice.hold.clear()
+    hospice.cores.clear()
+    hospice.refnanny.clear()
+
+    try:
+        yield
+    finally:
+        hospice.stage1.clear()
+        hospice.stage2.clear()
+        hospice.stage2_to_add.clear()
+        hospice.hold.clear()
+        hospice.cores.clear()
+        hospice.refnanny.clear()

@@ -17,7 +17,7 @@ from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from logging import getLogger
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, override
 from weakref import ReferenceType, ref
 
 from vapoursynth import (
@@ -130,7 +130,7 @@ class _ManagedPolicy(EnvironmentPolicy):
     def inline_section_start(self, environment: EnvironmentData) -> None:
         stack = getattr(self._local, "stack", None)
         if stack is None:
-            self._local.stack = stack = []
+            self._local.stack = stack = list[EnvironmentData]()
         stack.append(environment)
 
     # End the section.
@@ -146,19 +146,22 @@ class _ManagedPolicy(EnvironmentPolicy):
 
         raise RuntimeError("Invalid state: No access to the current API")
 
+    @override
     def on_policy_registered(self, special_api: EnvironmentPolicyAPI) -> None:
         self._api = special_api
         logger.debug("Environment policy %r successfully registered with VapourSynth.", special_api)
 
+    @override
     def on_policy_cleared(self) -> None:
         del self._api
         logger.debug("Environment policy successfully cleared.")
 
+    @override
     def get_current_environment(self) -> EnvironmentData | None:
         # For small segments, allow switching the environment inline.
         # This is useful for vsengine-functions that require access to the
         # vapoursynth api, but don't want to invoke the store for it.
-        stack = getattr(self._local, "stack", None)
+        stack: list[EnvironmentData] | None = getattr(self._local, "stack", None)
         if stack and self.is_alive(stack[-1]):
             return stack[-1]
 
@@ -193,6 +196,7 @@ class _ManagedPolicy(EnvironmentPolicy):
 
             return received_environment
 
+    @override
     def set_environment(self, environment: EnvironmentData | None) -> EnvironmentData | None:
         with self._mutex:
             previous_environment = self._store.get_current_environment()
@@ -321,13 +325,8 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
         """
         Switches to this environment within a block.
         """
-        # prev_environment = self._policy.managed._store.get_current_environment()
         with self._environment.use():
             yield
-
-        # FIXME
-        # # Workaround: On 32bit systems, environment policies do not reset.
-        # self._policy.managed.set_environment(prev_environment)
 
     def __del__(self) -> None:
         if self.disposed:

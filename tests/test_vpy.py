@@ -67,7 +67,7 @@ def test_run_executes_successfully() -> None:
     run = False
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal run
         run = True
 
@@ -80,8 +80,8 @@ def test_run_executes_successfully() -> None:
 
 def test_run_wraps_exception() -> None:
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
-        raise VpyTestError()
+    def test_code(*_: Any) -> None:
+        raise VpyTestError
 
     with Policy(GlobalStore()) as p, p.new_environment() as env:
         s = Script(test_code, types.ModuleType("__test__"), env.vs_environment, inline_runner)
@@ -96,7 +96,7 @@ def test_execute_resolves_immediately() -> None:
     run = False
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal run
         run = True
 
@@ -109,7 +109,7 @@ def test_execute_resolves_immediately() -> None:
 
 def test_execute_resolves_to_script() -> None:
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         pass
 
     with Policy(GlobalStore()) as p, p.new_environment() as env:
@@ -119,7 +119,7 @@ def test_execute_resolves_to_script() -> None:
 
 def test_execute_resolves_immediately_when_raising() -> None:
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         raise VpyTestError
 
     with Policy(GlobalStore()) as p, p.new_environment() as env:
@@ -140,7 +140,7 @@ async def test_run_async() -> None:
     run = False
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal run
         run = True
 
@@ -157,7 +157,7 @@ async def test_await_directly() -> None:
     run = False
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal run
         run = True
 
@@ -169,7 +169,7 @@ async def test_await_directly() -> None:
 
 def test_disposes_managed_environment() -> None:
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         pass
 
     with Policy(GlobalStore()) as p:
@@ -185,7 +185,7 @@ def test_disposes_managed_environment() -> None:
 
 def test_disposing_context_manager_for_managed_environments() -> None:
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         pass
 
     with Policy(GlobalStore()) as p:
@@ -203,25 +203,22 @@ def test_disposing_context_manager_for_managed_environments() -> None:
 def test_chdir_changes_chdir() -> None:
     curdir: str | None = None
 
-    @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code() -> None:
         nonlocal curdir
         curdir = os.getcwd()
 
     wrapped = chdir_runner(DIR, inline_runner)
-    wrapped(test_code, noop(), 2)  # type: ignore[arg-type]
+    wrapped(test_code)
     assert curdir == DIR
 
 
 def test_chdir_changes_chdir_back() -> None:
-    @callback_script
-    def test_code(_: types.ModuleType) -> None:
-        pass
+    def test_code(*_: Any) -> None: ...
 
     wrapped = chdir_runner(DIR, inline_runner)
 
     before = os.getcwd()
-    wrapped(test_code, noop(), None)  # type: ignore[arg-type]
+    wrapped(test_code)
     assert os.getcwd() == before
 
 
@@ -229,7 +226,7 @@ def test_load_uses_current_environment() -> None:
     vpy_env: Any = None
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal vpy_env
         vpy_env = vapoursynth.get_current_environment()
 
@@ -242,7 +239,7 @@ def test_load_creates_new_environment() -> None:
     vpy_env: Any = None
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal vpy_env
         vpy_env = vapoursynth.get_current_environment()
 
@@ -259,7 +256,7 @@ def test_load_chains_script() -> None:
     @callback_script
     def test_code_1(module: types.ModuleType) -> None:
         assert not hasattr(module, "test")
-        module.test = True  # type: ignore[attr-defined]
+        module.__dict__["test"] = True
 
     @callback_script
     def test_code_2(module: types.ModuleType) -> None:
@@ -303,7 +300,7 @@ def test_load_runs_chdir() -> None:
     curdir: str | None = None
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal curdir
         curdir = os.getcwd()
 
@@ -318,7 +315,7 @@ def test_load_runs_in_thread_when_requested() -> None:
     thread: threading.Thread | None = None
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal thread
         thread = threading.current_thread()
 
@@ -331,7 +328,7 @@ def test_load_runs_inline_by_default() -> None:
     thread: threading.Thread | None = None
 
     @callback_script
-    def test_code(_: types.ModuleType) -> None:
+    def test_code(*_: Any) -> None:
         nonlocal thread
         thread = threading.current_thread()
 
@@ -420,7 +417,7 @@ def test_dispose_prevents_hospice_warning_on_error(caplog: pytest.LogCaptureFixt
         import vapoursynth
 
         setattr(mod, "leak", vapoursynth.core.std.BlankClip())
-        raise VpyTestError()
+        raise VpyTestError
 
     with Policy(GlobalStore()) as p:
         s = Script(test_code, types.ModuleType("__test__"), p.new_environment(), inline_runner)
@@ -443,7 +440,7 @@ def test_hospice_warns_if_future_not_deleted(caplog: pytest.LogCaptureFixture) -
         import vapoursynth
 
         setattr(mod, "clip", vapoursynth.core.std.BlankClip())
-        raise VpyTestError()
+        raise VpyTestError
 
     with Policy(GlobalStore()) as p:
         env = p.new_environment()

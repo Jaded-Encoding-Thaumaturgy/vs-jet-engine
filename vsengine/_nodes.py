@@ -106,12 +106,14 @@ class _PrefetchBuffer[FrameT: RawFrame](Generator[Future[FrameT]]):
         with self.cond:
             self.running -= 1
             if self.finished:
-                return self.cond.notify_all()
+                self.cond.notify_all()
+                return
 
             # If a future fails or was cancelled, stop requesting further work
             if fut.cancelled() or fut.exception() is not None:
                 self.finished = True
-                return self.cond.notify_all()
+                self.cond.notify_all()
+                return
 
             # Top up the prefetch pipeline if not already inside a refill loop
             if not self.refilling:

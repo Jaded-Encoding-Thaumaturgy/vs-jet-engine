@@ -9,6 +9,7 @@ import contextlib
 import contextvars
 from collections.abc import Callable, Generator
 from concurrent.futures import Future
+from typing import override
 
 from vsengine.loops import Cancelled, EventLoop
 
@@ -38,10 +39,12 @@ class AsyncIOLoop(EventLoop):
     def loop(self, value: asyncio.AbstractEventLoop | None) -> None:
         self._loop = value
 
+    @override
     def attach(self) -> None:
         with contextlib.suppress(RuntimeError):
             self._loop = asyncio.get_running_loop()
 
+    @override
     def detach(self) -> None:
         self._loop = None
 
@@ -67,6 +70,7 @@ class AsyncIOLoop(EventLoop):
         loop.call_soon_threadsafe(wrap, context=contextvars.copy_context())
         return future
 
+    @override
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         if (loop := self.loop) is None or loop.is_closed():
             raise RuntimeError("No running asyncio event loop or loop is closed.")
@@ -101,6 +105,7 @@ class AsyncIOLoop(EventLoop):
 
         return future
 
+    @override
     def next_cycle(self) -> Future[None]:
         if (loop := self.loop) is None or loop.is_closed():
             raise RuntimeError("No running asyncio event loop or loop is closed.")
@@ -117,11 +122,13 @@ class AsyncIOLoop(EventLoop):
         loop.call_soon(continuation)
         return future
 
+    @override
     async def await_future[T](self, future: Future[T] | asyncio.Future[T]) -> T:
         with self.wrap_cancelled():
             return await asyncio.wrap_future(future)
 
     @contextlib.contextmanager
+    @override
     def wrap_cancelled(self) -> Generator[None]:
         try:
             yield

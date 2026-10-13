@@ -10,6 +10,7 @@ import contextlib
 import contextvars
 from collections.abc import Callable, Generator
 from concurrent.futures import Future
+from typing import override
 
 import trio
 
@@ -54,10 +55,12 @@ class TrioEventLoop(EventLoop):
     def token(self, value: trio.lowlevel.TrioToken | None) -> None:
         self._token = value
 
+    @override
     def attach(self) -> None:
         with contextlib.suppress(RuntimeError):
             self._token = trio.lowlevel.current_trio_token()
 
+    @override
     def detach(self) -> None:
         if self.nursery is not None:
             with contextlib.suppress(RuntimeError):
@@ -91,6 +94,7 @@ class TrioEventLoop(EventLoop):
 
         return future
 
+    @override
     def to_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         if self.nursery is None:
             raise RuntimeError("Trio nursery is not set.")
@@ -145,6 +149,7 @@ class TrioEventLoop(EventLoop):
 
         return future
 
+    @override
     def next_cycle(self) -> Future[None]:
         if self.token is None:
             raise RuntimeError("No running Trio event loop or token is inactive.")
@@ -162,6 +167,7 @@ class TrioEventLoop(EventLoop):
         self.from_thread(continuation)
         return future
 
+    @override
     async def await_future[T](self, future: Future[T]) -> T:
         if future.done():
             try:
@@ -186,6 +192,7 @@ class TrioEventLoop(EventLoop):
                 raise
 
     @contextlib.contextmanager
+    @override
     def wrap_cancelled(self) -> Generator[None]:
         try:
             yield

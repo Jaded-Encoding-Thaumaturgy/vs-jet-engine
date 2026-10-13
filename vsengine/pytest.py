@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, override, runtime_checkable
 
 import pluggy
 import pytest
@@ -55,7 +55,7 @@ def vpy_policy(request: pytest.FixtureRequest) -> Policy:
 
 
 @pytest.fixture
-def vpy_env_factory(request: pytest.FixtureRequest) -> Iterator[Callable[[], ManagedEnvironment]]:
+def vpy_env_factory(request: pytest.FixtureRequest) -> Generator[Callable[[], ManagedEnvironment]]:
     """
     Returns a factory that creates new VapourSynth environments
     and automatically disposes of them at the end of the test.
@@ -334,7 +334,7 @@ def _vpy_policy_impl(session: pytest.Session | None = None) -> Policy:
     raise RuntimeError("No environment policy registered. Is the test marked with @pytest.mark.vpy?")
 
 
-def _vpy_env_factory_impl(session: pytest.Session | None = None) -> Iterator[Callable[[], ManagedEnvironment]]:
+def _vpy_env_factory_impl(session: pytest.Session | None = None) -> Generator[Callable[[], ManagedEnvironment]]:
     envs = list[ManagedEnvironment]()
 
     def factory() -> ManagedEnvironment:
@@ -355,12 +355,15 @@ class CleanupFailed(TerminalRepr):
         self.previous = previous
         self.next_text = next_text
 
+    @override
     def __repr__(self) -> str:
         return f"<CleanupFailed instance at {id(self):0x}>"
 
+    @override
     def __str__(self) -> str:
         return self.next_text if self.previous is None else f"{self.previous}\n\n{self.next_text}"
 
+    @override
     def toterminal(self, tw: TerminalWriter) -> None:
         if self.previous is not None:
             if isinstance(self.previous, CleanupFailed):
@@ -397,6 +400,7 @@ class EnsureCleanEnvironment(pytest.Item):
         hospice.freeze()
         assert not any_alive_left, "Expected all environments to be cleaned up."
 
+    @override
     def repr_failure(
         self,
         excinfo: pytest.ExceptionInfo[BaseException],
@@ -404,5 +408,6 @@ class EnsureCleanEnvironment(pytest.Item):
     ) -> CleanupFailed:
         return CleanupFailed(None, "\n".join(DEFAULT_ERROR_MESSAGE))
 
+    @override
     def reportinfo(self) -> tuple[Path, None, str]:
         return self.path, None, f"cleaning up: {self.stage}"

@@ -25,7 +25,7 @@ For policy-unrelated tests, use the function use_standalone_policy.
 This function will build a policy which only ever uses one environment.
 """
 
-from typing import Any
+from typing import Any, override
 
 import vapoursynth as vs
 from vapoursynth import Core, EnvironmentData, EnvironmentPolicy, EnvironmentPolicyAPI, core
@@ -59,7 +59,7 @@ class ProxyPolicy(EnvironmentPolicy):
 
         self._policy = policy
         try:
-            policy.on_policy_registered(EnvironmentPolicyAPIWrapper(self._api, self))  # type: ignore[arg-type]
+            policy.on_policy_registered(EnvironmentPolicyAPIWrapper(self._api, self))  # pyrefly: ignore [bad-argument-type]
         except:
             self._policy = None
             raise
@@ -76,12 +76,14 @@ class ProxyPolicy(EnvironmentPolicy):
         self._api.unregister_policy()
         orig_register_policy(self)
 
+    @override
     def on_policy_registered(self, special_api: EnvironmentPolicyAPI) -> None:
         self._api = special_api
         # Patch both vapoursynth.register_policy and vsengine.policy.register_policy
         vs.register_policy = self.attach_policy_to_proxy
-        vsengine_policy.register_policy = self.attach_policy_to_proxy  # type: ignore[attr-defined]
+        vsengine_policy.register_policy = self.attach_policy_to_proxy
 
+    @override
     def on_policy_cleared(self) -> None:
         try:
             if self._policy is not None:
@@ -90,18 +92,21 @@ class ProxyPolicy(EnvironmentPolicy):
             self._policy = None
             self._api = None
             vs.register_policy = orig_register_policy
-            vsengine_policy.register_policy = orig_register_policy  # type: ignore[attr-defined]
+            vsengine_policy.register_policy = orig_register_policy
 
+    @override
     def get_current_environment(self) -> EnvironmentData | None:
         if self._policy is None:
             return None
         return self._policy.get_current_environment()
 
+    @override
     def set_environment(self, environment: EnvironmentData | None) -> EnvironmentData | None:
         if self._policy is None:
             return None
         return self._policy.set_environment(environment)
 
+    @override
     def is_alive(self, environment: EnvironmentData) -> bool:
         if self._policy is None:
             return False
@@ -116,11 +121,13 @@ class StandalonePolicy(EnvironmentPolicy):
     _core: Core
     __slots__ = ("_api", "_core", "_current")
 
+    @override
     def on_policy_registered(self, special_api: EnvironmentPolicyAPI) -> None:
         self._api = special_api
         self._current = special_api.create_environment()
         self._core = core.core
 
+    @override
     def on_policy_cleared(self) -> None:
         admit_environment(self._current, self._core)
         self._api.destroy_environment(self._current)
@@ -128,14 +135,17 @@ class StandalonePolicy(EnvironmentPolicy):
         del self._current
         del self._core
 
+    @override
     def get_current_environment(self) -> EnvironmentData:
         return self._current
 
+    @override
     def set_environment(self, environment: EnvironmentData | None) -> EnvironmentData | None:
         if environment is not None and environment is not self._current:
             raise RuntimeError("No other environments should exist.")
         return None
 
+    @override
     def is_alive(self, environment: EnvironmentData) -> bool:
         return self._current is environment
 

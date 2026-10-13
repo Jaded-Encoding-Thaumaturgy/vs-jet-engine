@@ -8,40 +8,62 @@
 import contextlib
 import queue
 import threading
+from collections.abc import Callable, Generator
 from concurrent.futures import CancelledError, Future
-from typing import Any, NoReturn
+from typing import Any, NamedTuple, NoReturn, override
 
 import pytest
 import vapoursynth
 
-from vsengine.loops import Cancelled, EventLoop, _NoEventLoop, from_thread, get_loop, set_loop, to_thread
+from vsengine.loops import NO_LOOP, Cancelled, EventLoop, _NoEventLoop, from_thread, get_loop, set_loop, to_thread
 from vsengine.policy import Policy, ThreadLocalStore
 
 
-class FailingEventLoop:
+class FailingEventLoop(EventLoop):
     """Event loop that fails on attach."""
 
+    @override
     def attach(self) -> NoReturn:
-        raise RuntimeError()
+        raise RuntimeError
 
 
-class SomeOtherLoop:
+class SomeOtherLoop(EventLoop):
     """A simple event loop for testing."""
 
+    @override
     def attach(self) -> None: ...
-
+    @override
     def detach(self) -> None: ...
 
 
 class SpinLoop(EventLoop):
     """A spin-based event loop for testing."""
 
-    def __init__(self) -> None:
-        self.queue = queue.Queue[tuple[Future[Any], Any, tuple[Any, ...], dict[str, Any]] | None]()
+    class QueueItem(NamedTuple):
+        fut: Future[Any]
+        func: Callable[..., Any]
+        args: tuple[Any, ...]
+        kwargs: dict[str, Any]
 
+    def __init__(self) -> None:
+        self.queue = queue.Queue[SpinLoop.QueueItem | None]()
+
+    @override
     def attach(self) -> None: ...
 
-    def detach(self) -> None: ...
+    @override
+    def detach(self) -> None:
+        if self.queue.is_shutdown:
+            return
+
+        self.stop()
+        self.queue.shutdown()
+
+    @override
+    def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+        fut = Future[Any]()
+        self.queue.put(SpinLoop.QueueItem(fut, func, args, kwargs))
+        return fut
 
     def run(self) -> None:
         while (value := self.queue.get()) is not None:
@@ -56,15 +78,16 @@ class SpinLoop(EventLoop):
     def stop(self) -> None:
         self.queue.put(None)
 
-    def from_thread(self, func: Any, *args: Any, **kwargs: Any) -> Future[Any]:
-        fut = Future[Any]()
-        self.queue.put((fut, func, args, kwargs))
-        return fut
+
+@pytest.fixture(autouse=True)
+def reset_loop() -> Generator[None]:
+    try:
+        yield
+    finally:
+        set_loop(_NoEventLoop())
 
 
 # NoLoop tests
-
-
 def test_no_loop_wrap_cancelled_converts_the_exception() -> None:
     loop = _NoEventLoop()
     with pytest.raises(CancelledError), loop.wrap_cancelled():
@@ -72,8 +95,6 @@ def test_no_loop_wrap_cancelled_converts_the_exception() -> None:
 
 
 # Loop API tests
-
-
 def test_loop_can_override() -> None:
     loop = _NoEventLoop()
     set_loop(loop)
@@ -81,15 +102,12 @@ def test_loop_can_override() -> None:
 
 
 def test_loop_reverts_to_no_on_error() -> None:
-    try:
-        set_loop(SomeOtherLoop())  # type: ignore[arg-type]
-        loop = FailingEventLoop()
-        with contextlib.suppress(RuntimeError):
-            set_loop(loop)  # type: ignore[arg-type]
+    set_loop(SomeOtherLoop())
+    loop = FailingEventLoop()
+    with contextlib.suppress(RuntimeError):
+        set_loop(loop)
 
-        assert isinstance(get_loop(), _NoEventLoop)
-    finally:
-        set_loop(_NoEventLoop())
+    assert get_loop() is NO_LOOP
 
 
 def test_loop_from_thread_retains_environment() -> None:
@@ -108,7 +126,6 @@ def test_loop_from_thread_retains_environment() -> None:
     finally:
         loop.stop()
         thr.join()
-        set_loop(_NoEventLoop())
 
 
 def test_loop_from_thread_does_not_require_environment() -> None:
@@ -117,15 +134,13 @@ def test_loop_from_thread_does_not_require_environment() -> None:
     thr = threading.Thread(target=loop.run)
     thr.start()
 
-    def test() -> None:
-        pass
+    def test() -> None: ...
 
     try:
         from_thread(test).result(timeout=0.1)
     finally:
         loop.stop()
         thr.join()
-        set_loop(_NoEventLoop())
 
 
 def test_loop_to_thread_retains_environment() -> None:
@@ -138,8 +153,7 @@ def test_loop_to_thread_retains_environment() -> None:
 
 
 def test_loop_to_thread_does_not_require_environment() -> None:
-    def test() -> None:
-        pass
+    def test() -> None: ...
 
     fut = to_thread(test)
     fut.result(timeout=0.1)

@@ -21,7 +21,7 @@ from concurrent.futures import Future
 from contextlib import AbstractContextManager, nullcontext, suppress
 from importlib.machinery import ModuleSpec, SourceFileLoader
 from types import CodeType, ModuleType, TracebackType
-from typing import Any, Concatenate, Self, overload
+from typing import Any, Self, overload
 from uuid import uuid4
 
 import vapoursynth as vs
@@ -189,9 +189,7 @@ def inline_runner[T](func: Callable[[], T]) -> Future[T]:
     return fut
 
 
-def chdir_runner[**P, R](
-    dir: str | os.PathLike[str], parent: Runner[R]
-) -> Callable[Concatenate[Callable[P, R], P], Future[R]]:
+def chdir_runner[R](dir: str | os.PathLike[str], parent: Runner[R]) -> Callable[[Callable[[], R]], Future[R]]:
     """
     Wraps a runner to change the current working directory during execution.
 
@@ -200,17 +198,17 @@ def chdir_runner[**P, R](
     :return: A wrapped runner function.
     """
 
-    def runner(func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
-        def _wrapped() -> R:
+    def runner(func: Callable[[], R]) -> Future[R]:
+        def wrapped() -> R:
             current = os.getcwd()
             os.chdir(dir)
 
             try:
-                return func(*args, **kwargs)
+                return func()
             finally:
                 os.chdir(current)
 
-        return parent(_wrapped)
+        return parent(wrapped)
 
     return runner
 
@@ -488,11 +486,8 @@ def load_code(
             _ModifiedPath(path) if path else nullcontext(),
             _ModifiedArgv0(filename) if path else nullcontext(),
         ):
-            code = (
-                compile(script, **{"filename": filename, "dont_inherit": True, "flags": 0, "mode": "exec"} | kwargs)
-                if not isinstance(script, CodeType)
-                else script
-            )
+            nkwargs: dict[str, Any] = {"filename": filename, "dont_inherit": True, "flags": 0, "mode": "exec"} | kwargs
+            code = compile(script, **nkwargs) if not isinstance(script, CodeType) else script
 
             _set_module_dunders(module, filename)
             exec(code, module.__dict__, module.__dict__)  # noqa: S102

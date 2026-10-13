@@ -13,7 +13,8 @@ import contextvars
 import functools
 import threading
 import unittest.mock
-from collections.abc import Awaitable, Callable, Generator, Iterator
+from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from concurrent.futures import CancelledError, Future
 from functools import wraps
 from inspect import isgenerator
@@ -49,8 +50,26 @@ def is_async[T: AsyncAdapterTest, **P](
     return _wrapped
 
 
-class AdapterTest:
+class AdapterTest(ABC):
     """Base class for event loop adapter tests."""
+
+    @abstractmethod
+    def make_loop(self) -> EventLoop: ...
+
+    @abstractmethod
+    def run_within_loop[**P](
+        self,
+        func: Callable[Concatenate[Self, P], Any],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None: ...
+
+    @abstractmethod
+    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]: ...
+
+    @contextlib.contextmanager
+    @abstractmethod
+    def assert_cancelled(self) -> Generator[None]: ...
 
     @contextlib.contextmanager
     def with_loop(self) -> Generator[EventLoop]:
@@ -61,42 +80,24 @@ class AdapterTest:
         finally:
             set_loop(NO_LOOP)
 
-    def make_loop(self) -> EventLoop:
-        raise NotImplementedError
-
-    def run_within_loop[**P](
-        self,
-        func: Callable[Concatenate[Self, P], Any],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> None:
-        raise NotImplementedError
-
-    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
-        raise NotImplementedError
-
-    @contextlib.contextmanager
-    def assert_cancelled(self) -> Generator[None]:
-        raise NotImplementedError
-
     @make_async
     def test_wrap_cancelled_without_cancellation(self) -> None:
         with self.with_loop() as loop, loop.wrap_cancelled():
             ...
 
     @make_async
-    def test_wrap_cancelled_with_cancellation(self) -> Iterator[None]:
+    def test_wrap_cancelled_with_cancellation(self) -> Generator[None]:
         with self.with_loop() as loop, self.assert_cancelled(), loop.wrap_cancelled():
             raise Cancelled
 
     @make_async
-    def test_wrap_cancelled_with_other_exception(self) -> Iterator[None]:
+    def test_wrap_cancelled_with_other_exception(self) -> Generator[None]:
         with self.with_loop() as loop, pytest.raises(RuntimeError), loop.wrap_cancelled():
-            raise RuntimeError()
+            raise RuntimeError
         yield
 
     @make_async
-    def test_next_cycle_doesnt_throw_when_not_cancelled(self) -> Iterator[None]:
+    def test_next_cycle_doesnt_throw_when_not_cancelled(self) -> Generator[None]:
         with self.with_loop() as loop:
             fut = loop.next_cycle()
             yield
@@ -104,7 +105,7 @@ class AdapterTest:
             assert fut.result() is None
 
     @make_async
-    def test_from_thread_with_success(self) -> Iterator[None]:
+    def test_from_thread_with_success(self) -> Generator[None]:
         def test_func() -> AdapterTest:
             return self
 
@@ -114,7 +115,7 @@ class AdapterTest:
             assert fut.result(timeout=0.5) is self
 
     @make_async
-    def test_from_thread_with_failure(self) -> Iterator[None]:
+    def test_from_thread_with_failure(self) -> Generator[None]:
         def test_func() -> None:
             raise RuntimeError
 
@@ -125,7 +126,7 @@ class AdapterTest:
                 fut.result(timeout=0.5)
 
     @make_async
-    def test_from_thread_forwards_correctly(self) -> Iterator[None]:
+    def test_from_thread_forwards_correctly(self) -> Generator[None]:
         def test_func(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
             return args, kwargs
 
@@ -137,7 +138,7 @@ class AdapterTest:
             assert kwargs == {"a": "b", "c": "d"}
 
     @make_async
-    def test_to_thread_spawns_a_new_thread(self) -> Iterator[None]:
+    def test_to_thread_spawns_a_new_thread(self) -> Generator[None]:
         def test_func() -> threading.Thread:
             return threading.current_thread()
 
@@ -146,7 +147,7 @@ class AdapterTest:
             assert threading.current_thread() != t2
 
     @make_async
-    def test_to_thread_runs_inline_with_failure(self) -> Iterator[None]:
+    def test_to_thread_runs_inline_with_failure(self) -> Generator[None]:
         def test_func() -> None:
             raise RuntimeError
 
@@ -154,7 +155,7 @@ class AdapterTest:
             yield from self.resolve_to_thread_future(loop.to_thread(test_func))
 
     @make_async
-    def test_to_thread_forwards_correctly(self) -> Iterator[None]:
+    def test_to_thread_forwards_correctly(self) -> Generator[None]:
         def test_func(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
             return args, kwargs
 
@@ -181,17 +182,20 @@ class AsyncAdapterTest(AdapterTest):
 
         return self.run_within_loop_async(wrapped)
 
+    @abstractmethod
     def run_within_loop_async[**P](
         self,
         func: Callable[Concatenate[Self, P], Awaitable[Any]],
         *args: P.args,
         **kwargs: P.kwargs,
-    ) -> None:
-        raise NotImplementedError
+    ) -> None: ...
 
-    async def wait_for[T](self, coro: Awaitable[T], timeout: float) -> T:
-        raise NotImplementedError
+    @abstractmethod
+    @contextlib.asynccontextmanager
+    async def timeout(self, delay: float) -> AsyncGenerator[None, Any]:
+        yield
 
+    @abstractmethod
     async def next_cycle(self) -> None: ...
 
     def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
@@ -208,7 +212,8 @@ class AsyncAdapterTest(AdapterTest):
                 fut.set_result(1)
 
             threading.Thread(target=_setter).start()
-            assert await self.wait_for(loop.await_future(fut), 0.5) == 1
+            async with self.timeout(0.5):
+                assert await loop.await_future(fut) == 1
 
     @is_async
     async def test_await_future_failure(self) -> None:
@@ -220,7 +225,8 @@ class AsyncAdapterTest(AdapterTest):
 
             threading.Thread(target=_setter).start()
             with pytest.raises(RuntimeError):
-                await self.wait_for(loop.await_future(fut), 0.5)
+                async with self.timeout(0.5):
+                    assert await loop.await_future(fut) == 1
 
 
 class TestNoLoop(AdapterTest):
@@ -240,14 +246,14 @@ class TestNoLoop(AdapterTest):
             for _ in result:
                 ...
 
+    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
+        yield
+        return fut.result(timeout=0.5)
+
     @contextlib.contextmanager
     def assert_cancelled(self) -> Generator[None]:
         with pytest.raises(CancelledError):
             yield
-
-    def resolve_to_thread_future[T](self, fut: Future[T]) -> Generator[None, None, T]:
-        yield
-        return fut.result(timeout=0.5)
 
 
 class TestAsyncIO(AsyncAdapterTest):
@@ -255,6 +261,11 @@ class TestAsyncIO(AsyncAdapterTest):
 
     def make_loop(self) -> AsyncIOLoop:
         return AsyncIOLoop()
+
+    @contextlib.contextmanager
+    def assert_cancelled(self) -> Generator[None]:
+        with pytest.raises(asyncio.CancelledError):
+            yield
 
     def run_within_loop_async[**P](
         self,
@@ -267,16 +278,13 @@ class TestAsyncIO(AsyncAdapterTest):
 
         asyncio.run(wrapped())
 
+    @contextlib.asynccontextmanager
+    async def timeout(self, delay: float) -> AsyncGenerator[None, Any]:
+        async with asyncio.timeout(delay):
+            yield
+
     async def next_cycle(self) -> None:
         await asyncio.sleep(0.01)
-
-    async def wait_for[T](self, coro: Awaitable[T], timeout: float) -> T:
-        return await asyncio.wait_for(coro, timeout)
-
-    @contextlib.contextmanager
-    def assert_cancelled(self) -> Generator[None]:
-        with pytest.raises(asyncio.CancelledError):
-            yield
 
 
 class TestTrio(AsyncAdapterTest):
@@ -287,8 +295,10 @@ class TestTrio(AsyncAdapterTest):
     def make_loop(self) -> TrioEventLoop:
         return TrioEventLoop(self.nursery)
 
-    async def next_cycle(self) -> None:
-        await trio.sleep(0.01)
+    @contextlib.contextmanager
+    def assert_cancelled(self) -> Generator[None]:
+        with pytest.raises(trio.Cancelled):
+            yield
 
     def run_within_loop_async[**P](
         self,
@@ -303,14 +313,13 @@ class TestTrio(AsyncAdapterTest):
 
         trio.run(wrapped)
 
-    async def wait_for[T](self, coro: Awaitable[T], timeout: float) -> T:
-        with trio.fail_after(timeout):
-            return await coro
-
-    @contextlib.contextmanager
-    def assert_cancelled(self) -> Generator[None]:
-        with pytest.raises(trio.Cancelled):
+    @contextlib.asynccontextmanager
+    async def timeout(self, delay: float) -> AsyncGenerator[None, Any]:
+        with trio.fail_after(delay):
             yield
+
+    async def next_cycle(self) -> None:
+        await trio.sleep(0.01)
 
 
 def test_asyncio_methods_without_running_loop() -> None:
@@ -341,7 +350,7 @@ def test_trio_methods_without_running_token() -> None:
 
 def test_trio_from_thread_contextvars() -> None:
     """Ensure TrioEventLoop propagates contextvars from the calling thread."""
-    var: contextvars.ContextVar[str] = contextvars.ContextVar("var", default="default")
+    var = contextvars.ContextVar("var", default="default")
 
     async def main() -> None:
         async with trio.open_nursery() as nursery:
@@ -372,9 +381,7 @@ def test_to_thread_with_partial() -> None:
         async with trio.open_nursery() as nursery:
             loop = TrioEventLoop(nursery)
             fut = loop.to_thread(part)
-            while not fut.done():
-                await trio.sleep(0.01)
-            assert fut.result() == 30
+            assert await loop.await_future(fut) == 30
 
     trio.run(trio_main)
 
@@ -382,9 +389,7 @@ def test_to_thread_with_partial() -> None:
     async def asyncio_main() -> None:
         loop = AsyncIOLoop()
         fut = loop.to_thread(part)
-        while not fut.done():
-            await asyncio.sleep(0.01)
-        assert fut.result() == 30
+        assert await loop.await_future(fut) == 30
 
     asyncio.run(asyncio_main())
 

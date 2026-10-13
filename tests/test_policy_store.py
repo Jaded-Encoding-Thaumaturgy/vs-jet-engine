@@ -6,12 +6,15 @@
 """Tests for the policy environment stores."""
 
 import sys
-from collections.abc import Iterator
+from abc import abstractmethod
+from collections.abc import Generator
 from concurrent import futures
 from contextvars import copy_context
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+from pytest_mock import MockerFixture
 
 from vsengine.policy import ContextVarStore, EnvironmentStore, GlobalStore, ThreadLocalStore
 
@@ -21,22 +24,28 @@ class BaseStoreTest:
 
     store: EnvironmentStore
 
-    def create_store(self) -> EnvironmentStore:
-        raise NotImplementedError
+    @abstractmethod
+    def create_store(self) -> EnvironmentStore: ...
 
     @pytest.fixture(autouse=True)
-    def setup_store(self) -> Iterator[None]:
+    def setup_store(self) -> Generator[None]:
         self.store = self.create_store()
-        yield
-        self.store.set_current_environment(None)
+        try:
+            yield
+        finally:
+            self.store.set_current_environment(None)
 
-    def test_basic_functionality(self) -> None:
+    def test_basic_functionality(self, mocker: MockerFixture) -> None:
         assert self.store.get_current_environment() is None
 
-        self.store.set_current_environment(1)  # type: ignore[arg-type]
-        assert self.store.get_current_environment() == 1
-        self.store.set_current_environment(2)  # type: ignore[arg-type]
-        assert self.store.get_current_environment() == 2
+        one = mocker.MagicMock()
+        self.store.set_current_environment(one)
+        assert self.store.get_current_environment() == one
+
+        two = mocker.MagicMock()
+        self.store.set_current_environment(two)
+        assert self.store.get_current_environment() == two
+
         self.store.set_current_environment(None)
         assert self.store.get_current_environment() is None
 
@@ -54,16 +63,18 @@ class TestThreadLocalStore(BaseStoreTest):
     def create_store(self) -> ThreadLocalStore:
         return ThreadLocalStore()
 
-    def test_threads_do_not_influence_each_other(self) -> None:
+    def test_threads_do_not_influence_each_other(self, mocker: MockerFixture) -> None:
         def thread() -> None:
             assert self.store.get_current_environment() is None
-            self.store.set_current_environment(2)  # type: ignore[arg-type]
-            assert self.store.get_current_environment() == 2
+            mock_two = mocker.MagicMock()
+            self.store.set_current_environment(mock_two)
+            assert self.store.get_current_environment() == mock_two
 
         with futures.ThreadPoolExecutor(max_workers=1) as e:
-            self.store.set_current_environment(1)  # type: ignore[arg-type]
+            mock_one = mocker.MagicMock()
+            self.store.set_current_environment(mock_one)
             e.submit(thread).result()
-            assert self.store.get_current_environment() == 1
+            assert self.store.get_current_environment() == mock_one
 
 
 class TestContextVarStore(BaseStoreTest):
@@ -72,31 +83,37 @@ class TestContextVarStore(BaseStoreTest):
     def create_store(self) -> ContextVarStore:
         return ContextVarStore("store_test")
 
-    def test_threads_do_not_influence_each_other(self) -> None:
-        expected_initial = 1 if getattr(sys.flags, "thread_inherit_context", 0) else None
+    def test_threads_do_not_influence_each_other(self, mocker: MockerFixture) -> None:
+        mock_one = mocker.MagicMock(name="one")
+        expected_initial = mock_one if getattr(sys.flags, "thread_inherit_context", 0) else None
 
         def thread() -> None:
             assert self.store.get_current_environment() == expected_initial
-            self.store.set_current_environment(2)  # type: ignore[arg-type]
-            assert self.store.get_current_environment() == 2
+            mock_two = mocker.MagicMock(name="two")
+            self.store.set_current_environment(mock_two)
+            assert self.store.get_current_environment() == mock_two
 
         with futures.ThreadPoolExecutor(max_workers=1) as e:
-            self.store.set_current_environment(1)  # type: ignore[arg-type]
+            self.store.set_current_environment(mock_one)
             e.submit(thread).result()
-            assert self.store.get_current_environment() == 1
+            assert self.store.get_current_environment() == mock_one
 
-    def test_contexts_do_not_influence_each_other(self) -> None:
-        def context(p: Any, n: Any) -> None:
+    def test_contexts_do_not_influence_each_other(self, mocker: MockerFixture) -> None:
+        def context(p: Any, n: MagicMock) -> None:
             assert self.store.get_current_environment() == p
             self.store.set_current_environment(n)
             assert self.store.get_current_environment() == n
 
+        mock_one = mocker.MagicMock()
+        mock_two = mocker.MagicMock()
+        mock_three = mocker.MagicMock()
         ctx = copy_context()
-        ctx.run(context, None, 1)
+
+        ctx.run(context, None, mock_one)
         assert self.store.get_current_environment() is None
 
-        self.store.set_current_environment(2)  # type: ignore[arg-type]
-        assert self.store.get_current_environment() == 2
-        ctx.run(context, 1, 3)
+        self.store.set_current_environment(mock_two)
+        assert self.store.get_current_environment() == mock_two
+        ctx.run(context, mock_one, mock_three)
 
-        assert self.store.get_current_environment() == 2
+        assert self.store.get_current_environment() == mock_two

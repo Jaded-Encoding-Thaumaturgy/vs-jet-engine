@@ -31,7 +31,7 @@ def test_use_inline_with_set_environment() -> None:
 def test_use_inline_fails_without_an_environment() -> None:
     with (
         Policy(GlobalStore()),
-        pytest.raises(OSError),
+        pytest.raises(OSError, match="You are currently not running within an environment"),
         use_inline("test_fails_without_an_environment", None),
     ):
         pass

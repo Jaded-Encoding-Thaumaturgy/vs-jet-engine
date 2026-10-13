@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 from __future__ import annotations
 
+from typing import override
+
 __lazy_modules__ = ["asyncio", "traceback"]
 
 import asyncio
@@ -151,6 +153,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         return future
 
     # Adding callbacks
+    @override
     def add_done_callback(self, fn: Callable[[Future[T]], Any]) -> None:
         """
         Register a callback to be called when this future completes.
@@ -625,9 +628,8 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
             else:
                 if result is None or bool(result):
                     return True
-                else:
-                    state.set_result(None)
-                    return False
+                state.set_result(None)
+                return False
 
         # Optimization:
         # We do not need to inherit any kind of environment as
@@ -757,13 +759,16 @@ def unified[T, **P](
         func: Callable[P, Iterator[Future[T]]] | Callable[P, Future[T]],
     ) -> Callable[P, UnifiedIterator[T]] | Callable[P, UnifiedFuture[T]]:
         if kind == "auto":
-            return _decorator_generator(func) if isgeneratorfunction(func) else _decorator_future(func)  # type:ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            return _decorator_generator(func) if isgeneratorfunction(func) else _decorator_future(func)
 
         if kind == "generator":
-            return _decorator_generator(func)  # type:ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            return _decorator_generator(func)
 
         if kind == "future":
-            return _decorator_future(func)  # type:ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            return _decorator_future(func)
 
         raise NotImplementedError
 

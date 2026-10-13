@@ -11,7 +11,7 @@ import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, override
 
 import pytest
 
@@ -57,7 +57,7 @@ def fails() -> Future[None]:
 
 
 def fails_early() -> Future[None]:
-    raise RuntimeError()
+    raise RuntimeError
 
 
 def future_iterator() -> Iterator[Future[int]]:
@@ -407,14 +407,12 @@ def test_unified_iterator_run_as_completed_requests_as_needed() -> None:
 def test_unified_iterator_run_as_completed_cancels_on_iterator_crash() -> None:
     err = RuntimeError("test")
 
-    def _it() -> Iterator[Future[int]]:
-        if False:
-            yield Future[int]()  # type:ignore[unreachable]
+    def it() -> Iterator[Future[int]]:
         raise err
 
     def noop(_: Future[int]) -> None: ...
 
-    state = UnifiedIterator(_it()).run_as_completed(noop)
+    state = UnifiedIterator(it()).run_as_completed(noop)
     assert state.done()
     assert state.exception() is err
 
@@ -636,6 +634,7 @@ def test_run_as_completed_next_cycle_fails() -> None:
     set_loop(NO_LOOP)
 
     class CustomFailedLoop(_NoEventLoop):
+        @override
         def next_cycle(self) -> Future[None]:
             fut = Future[None]()
             fut.set_exception(ValueError("next_cycle failed"))
@@ -663,6 +662,7 @@ def test_run_as_completed_next_cycle_fails_async() -> None:
         def __init__(self) -> None:
             self.next_cycle_futs = list[Future[None]]()
 
+        @override
         def next_cycle(self) -> Future[None]:
             fut = Future[None]()
             self.next_cycle_futs.append(fut)
@@ -806,7 +806,7 @@ def test_unified_future_cancellation_propagates_to_closed_asyncio_future() -> No
 
 @pytest.mark.asyncio
 async def test_unified_future_cancellation_prevents_asyncio_task_from_running() -> None:
-    ran = False
+    ran: bool = False
 
     async def source() -> int:
         nonlocal ran
