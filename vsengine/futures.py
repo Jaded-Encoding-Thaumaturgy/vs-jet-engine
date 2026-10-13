@@ -29,7 +29,7 @@ class FutureLike[V](Protocol):
 
 
 class AsyncFutureLike[V](Protocol):
-    async def awaitable(self) -> V: ...
+    def __await__(self) -> Generator[Any, None, V]: ...
 
 
 type UnifiedFutureLike[T] = UnifiedFuture[T]
@@ -42,114 +42,56 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
     with Python's synchronous and asynchronous context manager and awaitable protocols.
     """
 
-    @classmethod
-    def from_call[S, **P](
-        cls: type[UnifiedFutureLike[S]],
-        func: Callable[P, Future[S]],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> UnifiedFutureLike[S]:
-        """
-        Call `func` and wrap the returned `Future` as a `UnifiedFuture`.
+    def __enter__[EnterT](self: FutureLike[AbstractContextManager[EnterT, Any]]) -> EnterT:
+        obj = self.result()
 
-        Any exception raised synchronously by `func` is captured and stored as a rejection
-        on the returned future rather than propagating to the caller.
+        if isinstance(obj, AbstractContextManager):
+            return obj.__enter__()
 
-        :param func: A callable that returns a `Future`.
-        :param args: Positional arguments forwarded to `func`.
-        :param kwargs: Keyword arguments forwarded to `func`.
-        :return: A `UnifiedFuture` that mirrors the result of `func`.
-        """
-        try:
-            future = func(*args, **kwargs)
-        except Exception as e:
-            return cls.reject(e)
+        raise NotImplementedError("(async) with is not implemented for this object")
 
-        return cls.from_future(future)
+    def __exit__(
+        self,
+        exc: type[BaseException] | None,
+        val: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        obj = self.result()
 
-    @classmethod
-    def from_future[S](cls: type[UnifiedFutureLike[S]], future: Future[S] | asyncio.Future[S]) -> UnifiedFutureLike[S]:
-        """
-        Wrap an existing `Future` as a `UnifiedFuture`.
+        if isinstance(obj, AbstractContextManager):
+            return obj.__exit__(exc, val, tb)
 
-        If `future` is already an instance of this class it is returned unchanged.
+        raise NotImplementedError("(async) with is not implemented for this object")
 
-        :param future: The future to wrap.
-        :return: A `UnifiedFuture` that mirrors `future`.
-        """
-        if isinstance(future, cls):
-            return future
+    async def __aenter__[EnterT](
+        self: AsyncFutureLike[AbstractAsyncContextManager[EnterT, Any] | AbstractContextManager[EnterT, Any]],
+    ) -> EnterT:
+        result = await self
 
-        result = cls()
+        if isinstance(result, AbstractAsyncContextManager):
+            return await result.__aenter__()
+        if isinstance(result, AbstractContextManager):
+            return result.__enter__()
 
-        def receive(_: Future[S] | asyncio.Future[S]) -> None:
-            if result.done():
-                return
-            if future.cancelled():
-                result.cancel()
-                return
-            try:
-                exc = future.exception()
-            except (CancelledError, asyncio.CancelledError):
-                # Catch any cancellation race condition
-                result.cancel()
-                return
+        raise NotImplementedError("(async) with is not implemented for this object")
 
-            if exc is not None:
-                with suppress(InvalidStateError):
-                    result.set_exception(exc)
-            else:
-                with suppress(InvalidStateError):
-                    result.set_result(future.result())
+    async def __aexit__(
+        self,
+        exc: type[BaseException] | None,
+        val: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        result = await self
 
-        # Safely propagate cancellation back to the original future
-        def on_result_cancelled(f: Future[S]) -> None:
-            if not f.cancelled() or future.done():
-                return
+        if isinstance(result, AbstractAsyncContextManager):
+            return await result.__aexit__(exc, val, tb)
+        if isinstance(result, AbstractContextManager):
+            return result.__exit__(exc, val, tb)
 
-            if isinstance(future, asyncio.Future):
-                cls._dispatch_to_loop(future, future.cancel)
-            else:
-                future.cancel()
+        raise NotImplementedError("(async) with is not implemented for this object")
 
-        result.add_done_callback(on_result_cancelled)
-
-        # Safely register the completion callback
-        if isinstance(future, asyncio.Future):
-            cls._dispatch_to_loop(
-                future,
-                future.add_done_callback,
-                receive,
-                on_closed_done=receive,
-                on_closed_incomplete=result.cancel,
-            )
-        else:
-            future.add_done_callback(receive)
-        return result
-
-    @classmethod
-    def resolve[S](cls: type[UnifiedFutureLike[S]], value: S) -> UnifiedFutureLike[S]:
-        """
-        Return an already-resolved `UnifiedFuture` carrying `value`.
-
-        :param value: The value to resolve with.
-        :return: A resolved `UnifiedFuture`.
-        """
-        future = cls()
-        future.set_result(value)
-        return future
-
-    @classmethod
-    def reject(cls: type[UnifiedFutureLike[Any]], error: BaseException) -> UnifiedFutureLike[Any]:
-        """
-        Return an already-rejected `UnifiedFuture` carrying `error`.
-
-        :param error: The exception to reject with.
-        :return: A rejected `UnifiedFuture`.
-        """
-        future = cls()
-        future.set_exception(error)
-        return future
+    def __await__(self) -> Generator[Any, None, T]:
+        return get_loop().await_future(self).__await__()
 
     # Adding callbacks
     @override
@@ -344,66 +286,114 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         """
         return self.then(None, cb, cancel_cb, on_loop=on_loop)
 
-    # Nicer Syntax
-    def __enter__[EnterT](self: FutureLike[AbstractContextManager[EnterT, Any]]) -> EnterT:
-        obj = self.result()
-
-        if isinstance(obj, AbstractContextManager):
-            return obj.__enter__()
-
-        raise NotImplementedError("(async) with is not implemented for this object")
-
-    def __exit__(
-        self,
-        exc: type[BaseException] | None,
-        val: BaseException | None,
-        tb: TracebackType | None,
-    ) -> bool | None:
-        obj = self.result()
-
-        if isinstance(obj, AbstractContextManager):
-            return obj.__exit__(exc, val, tb)
-
-        raise NotImplementedError("(async) with is not implemented for this object")
-
-    async def awaitable(self) -> T:
+    @classmethod
+    def from_call[S, **P](
+        cls: type[UnifiedFutureLike[S]],
+        func: Callable[P, Future[S]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> UnifiedFutureLike[S]:
         """
-        Await this future using the currently active event loop.
+        Call `func` and wrap the returned `Future` as a `UnifiedFuture`.
 
-        :return: The resolved value of this future.
-        :raises: Whatever exception this future was rejected with.
+        Any exception raised synchronously by `func` is captured and stored as a rejection
+        on the returned future rather than propagating to the caller.
+
+        :param func: A callable that returns a `Future`.
+        :param args: Positional arguments forwarded to `func`.
+        :param kwargs: Keyword arguments forwarded to `func`.
+        :return: A `UnifiedFuture` that mirrors the result of `func`.
         """
-        return await get_loop().await_future(self)
+        try:
+            future = func(*args, **kwargs)
+        except Exception as e:
+            return cls.reject(e)
 
-    def __await__(self) -> Generator[Any, None, T]:
-        return self.awaitable().__await__()
+        return cls.from_future(future)
 
-    async def __aenter__[EnterT](
-        self: AsyncFutureLike[AbstractAsyncContextManager[EnterT, Any] | AbstractContextManager[EnterT, Any]],
-    ) -> EnterT:
-        result = await self.awaitable()
+    @classmethod
+    def from_future[S](cls: type[UnifiedFutureLike[S]], future: Future[S] | asyncio.Future[S]) -> UnifiedFutureLike[S]:
+        """
+        Wrap an existing `Future` as a `UnifiedFuture`.
 
-        if isinstance(result, AbstractAsyncContextManager):
-            return await result.__aenter__()
-        if isinstance(result, AbstractContextManager):
-            return result.__enter__()
+        If `future` is already an instance of this class it is returned unchanged.
 
-        raise NotImplementedError("(async) with is not implemented for this object")
+        :param future: The future to wrap.
+        :return: A `UnifiedFuture` that mirrors `future`.
+        """
+        if isinstance(future, cls):
+            return future
 
-    async def __aexit__(
-        self,
-        exc: type[BaseException] | None,
-        val: BaseException | None,
-        tb: TracebackType | None,
-    ) -> bool | None:
-        result = await self.awaitable()
+        result = cls()
 
-        if isinstance(result, AbstractAsyncContextManager):
-            return await result.__aexit__(exc, val, tb)
-        if isinstance(result, AbstractContextManager):
-            return result.__exit__(exc, val, tb)
+        def receive(_: Future[S] | asyncio.Future[S]) -> None:
+            if result.done():
+                return
+            if future.cancelled():
+                result.cancel()
+                return
+            try:
+                exc = future.exception()
+            except (CancelledError, asyncio.CancelledError):
+                # Catch any cancellation race condition
+                result.cancel()
+                return
 
-        raise NotImplementedError("(async) with is not implemented for this object")
+            if exc is not None:
+                with suppress(InvalidStateError):
+                    result.set_exception(exc)
+            else:
+                with suppress(InvalidStateError):
+                    result.set_result(future.result())
+
+        # Safely propagate cancellation back to the original future
+        def on_result_cancelled(f: Future[S]) -> None:
+            if not f.cancelled() or future.done():
+                return
+
+            if isinstance(future, asyncio.Future):
+                cls._dispatch_to_loop(future, future.cancel)
+            else:
+                future.cancel()
+
+        result.add_done_callback(on_result_cancelled)
+
+        # Safely register the completion callback
+        if isinstance(future, asyncio.Future):
+            cls._dispatch_to_loop(
+                future,
+                future.add_done_callback,
+                receive,
+                on_closed_done=receive,
+                on_closed_incomplete=result.cancel,
+            )
+        else:
+            future.add_done_callback(receive)
+        return result
+
+    @classmethod
+    def resolve[S](cls: type[UnifiedFutureLike[S]], value: S) -> UnifiedFutureLike[S]:
+        """
+        Return an already-resolved `UnifiedFuture` carrying `value`.
+
+        :param value: The value to resolve with.
+        :return: A resolved `UnifiedFuture`.
+        """
+        future = cls()
+        future.set_result(value)
+        return future
+
+    @classmethod
+    def reject(cls: type[UnifiedFutureLike[Any]], error: BaseException) -> UnifiedFutureLike[Any]:
+        """
+        Return an already-rejected `UnifiedFuture` carrying `error`.
+
+        :param error: The exception to reject with.
+        :return: A rejected `UnifiedFuture`.
+        """
+        future = cls()
+        future.set_exception(error)
+        return future
 
     @staticmethod
     def _dispatch_to_loop[*Ts](
@@ -498,29 +488,23 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
     """
 
     def __init__(self, future_iterable: Iterator[Future[T]]) -> None:
-        self.future_iterable = future_iterable
+        self.futures = future_iterable
 
-    @classmethod
-    def from_call[S, **P](
-        cls: type[UnifiedIteratorLike[S]],
-        func: Callable[P, Iterator[Future[S]]],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> UnifiedIteratorLike[S]:
-        """
-        Call `func` and wrap the returned iterator as a `UnifiedIterator`.
+    def __iter__(self) -> Self:
+        return self
 
-        :param func: A callable that returns an `Iterator[Future[S]]`.
-        :param args: Positional arguments forwarded to `func`.
-        :param kwargs: Keyword arguments forwarded to `func`.
-        :return: A `UnifiedIterator` wrapping the returned iterator.
-        """
-        return cls(func(*args, **kwargs))
+    def __aiter__(self) -> Self:
+        return self
 
-    @property
-    def futures(self) -> Iterator[Future[T]]:
-        """The raw underlying `Iterator[Future[T]]`."""
-        return self.future_iterable
+    def __next__(self) -> T:
+        return next(self.futures).result()
+
+    def __anext__(self) -> Awaitable[T]:
+        try:
+            fut = next(self.futures)
+        except StopIteration:
+            raise StopAsyncIteration
+        return get_loop().await_future(fut)
 
     @overload
     def run_as_completed(self, callback: Callable[[Future[T]], Any]) -> UnifiedFuture[None]: ...
@@ -562,7 +546,7 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
                 return None
 
             try:
-                next_future = next(self.future_iterable)
+                next_future = next(self.futures)
             except StopIteration:
                 state.set_result(None)
                 return None
@@ -636,21 +620,22 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         get_loop().from_thread(_run_callbacks)
         return state
 
-    def __iter__(self) -> Self:
-        return self
+    @classmethod
+    def from_call[S, **P](
+        cls: type[UnifiedIteratorLike[S]],
+        func: Callable[P, Iterator[Future[S]]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> UnifiedIteratorLike[S]:
+        """
+        Call `func` and wrap the returned iterator as a `UnifiedIterator`.
 
-    def __next__(self) -> T:
-        return next(self.future_iterable).result()
-
-    def __aiter__(self) -> Self:
-        return self
-
-    async def __anext__(self) -> T:
-        try:
-            fut = next(self.future_iterable)
-        except StopIteration:
-            raise StopAsyncIteration
-        return await get_loop().await_future(fut)
+        :param func: A callable that returns an `Iterator[Future[S]]`.
+        :param args: Positional arguments forwarded to `func`.
+        :param kwargs: Keyword arguments forwarded to `func`.
+        :return: A `UnifiedIterator` wrapping the returned iterator.
+        """
+        return cls(func(*args, **kwargs))
 
 
 class _UnifiedIteratorDecorator[U: UnifiedIterator[Any]](Protocol):

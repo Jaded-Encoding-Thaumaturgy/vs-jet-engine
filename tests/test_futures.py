@@ -92,12 +92,6 @@ async def test_unified_future_is_await() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_future_awaitable() -> None:
-    set_loop(AsyncIOLoop())
-    await UnifiedFuture.from_call(succeeds).awaitable()
-
-
-@pytest.mark.asyncio
 async def test_unified_future_async_context_manager_async() -> None:
     set_loop(AsyncIOLoop())
     async with UnifiedFuture.from_call(asynccontextmanager_helper) as v:
