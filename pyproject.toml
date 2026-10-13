@@ -81,6 +81,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
+disable_warnings = ["couldnt-parse"]
+source = ["vsengine"]
 omit = ["vsengine/_version.py", "vsengine/__init__.py", "tests/*"]
 
 [tool.pyrefly]
