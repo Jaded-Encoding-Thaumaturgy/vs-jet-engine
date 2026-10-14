@@ -53,11 +53,7 @@ class SpinLoop(EventLoop):
 
     @override
     def detach(self) -> None:
-        if self.queue.is_shutdown:
-            return
-
         self.stop()
-        self.queue.shutdown()
 
     @override
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
