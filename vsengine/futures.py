@@ -428,6 +428,16 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         on_closed_done: Callable[[asyncio.Future[Any]], Any] | None = None,
         on_closed_incomplete: Callable[[], Any] | None = None,
     ) -> None:
+
+        def when_loop_is_closed() -> None:
+            if fut.done() and on_closed_done:
+                on_closed_done(fut)
+            elif on_closed_incomplete:
+                on_closed_incomplete()
+            else:
+                with suppress(RuntimeError):
+                    action(*args)
+
         f_loop = fut.get_loop()
         try:
             current_loop = asyncio.get_running_loop()
@@ -437,25 +447,12 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
         if current_loop is f_loop:
             action(*args)
         elif f_loop.is_closed():
-            if fut.done() and on_closed_done:
-                on_closed_done(fut)
-            elif on_closed_incomplete:
-                on_closed_incomplete()
-            else:
-                with suppress(RuntimeError):
-                    action(*args)
+            when_loop_is_closed()
         else:
             try:
                 f_loop.call_soon_threadsafe(action, *args, context=contextvars.copy_context())
             except RuntimeError:
-                # Loop closed concurrently
-                if fut.done() and on_closed_done is not None:
-                    on_closed_done(fut)
-                elif on_closed_incomplete is not None:
-                    on_closed_incomplete()
-                else:
-                    with suppress(RuntimeError):
-                        action(*args)
+                when_loop_is_closed()
 
     def _link_cancellation(
         self,
