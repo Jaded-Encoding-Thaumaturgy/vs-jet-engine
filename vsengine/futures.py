@@ -5,23 +5,22 @@
 # SPDX-License-Identifier: EUPL-1.2
 from __future__ import annotations
 
-from typing import override
-
-__lazy_modules__ = ["asyncio", "traceback"]
+__lazy_modules__ = ["asyncio", "multiprocessing"]
 
 import asyncio
 import contextvars
-import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterator
+import multiprocessing
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
 from concurrent.futures import CancelledError, Future, InvalidStateError
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, suppress
 from functools import wraps
 from types import TracebackType
-from typing import Any, Literal, Protocol, Self, overload
+from typing import Any, Literal, Protocol, Self, overload, override
 
 from vsengine.loops import get_loop, keep_environment
 
-__all__ = ["UnifiedFuture", "UnifiedIterator", "unified"]
+__all__ = ["UnifiedFuture", "UnifiedIterator", "as_completed", "unified"]
 
 
 class FutureLike[V](Protocol):
@@ -511,8 +510,8 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
     cooperating with the active event loop.
     """
 
-    def __init__(self, future_iterable: Iterator[Future[T]]) -> None:
-        self.futures = future_iterable
+    def __init__(self, future_iterable: Iterable[Future[T]]) -> None:
+        self.futures = iter(future_iterable)
 
     def __iter__(self) -> Self:
         return self
@@ -531,118 +530,105 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         return get_loop().await_future(fut)
 
     @overload
-    def run_as_completed(self, callback: Callable[[Future[T]], Any]) -> UnifiedFuture[None]: ...
+    def consume(self, cb: Callable[[Future[T]], Any]) -> UnifiedFuture[None]: ...
     @overload
-    def run_as_completed[U: Future[None]](
-        self,
-        callback: Callable[[Future[T]], Any],
-        future_factory: Callable[[], U],
-    ) -> U: ...
-    def run_as_completed(
-        self,
-        callback: Callable[[Future[T]], Any],
-        future_factory: Callable[[], Future[None]] | None = None,
-    ) -> Future[None]:
+    def consume[U: UnifiedFuture[None]](self, cb: Callable[[Future[T]], Any], future_factory: Callable[[], U]) -> U: ...
+    def consume(
+        self, cb: Callable[[Future[T]], Any], future_factory: Callable[[], UnifiedFuture[None]] | None = None
+    ) -> UnifiedFuture[None]:
         """
-        Consume the iterator and invoke `callback` for each future as it completes.
+        Consume the iterator sequentially, invoking `callback` for each future.
 
         The loop is event-loop-cooperative:
-        after each callback it calls `EventLoop.next_cycle` to yield control back to the event loop
-        so that other work can proceed.
+        after each callback it calls `EventLoop.next_cycle` to yield control back to the event loop.
 
         The returned `UnifiedFuture` resolves to `None` when all futures have been processed, or is rejected if:
 
         * the iterator raises,
-        * `callback` raises, or
-        * `callback` returns a falsy non-`None` value (signals an early stop).
+        * `callback` raises,
+        * `callback` returns a falsy non-`None` value (signals an early stop), or
+        * a loop cycle future fails.
 
-        Cancellation is detected by checking `Future.cancelled()` on the state future; raise `Cancelled` to abort.
+        Cancellation is detected by checking `Future.cancelled()` on the state future.
 
-        :param callback: Called for each completed `Future`.
+        :param cb: Called for each completed `Future`.
             Return `None` or a truthy value to continue; return a falsy value to stop iteration early.
         :param future_factory: Future class used to carry the state.
         :return: A `UnifiedFuture` that resolves when iteration is complete.
         """
         state = (future_factory or UnifiedFuture[None])()
+        cb = keep_environment(cb)
 
-        def _get_next_future() -> Future[T] | None:
+        def pipeline() -> Generator[Future[Any]]:
+            for fut in self.futures:
+                if state.done():
+                    return
+
+                if not fut.done():
+                    yield fut
+
+                res = cb(fut)
+                if res is not None and not res:
+                    return
+
+                cycle = get_loop().next_cycle()
+
+                if not cycle.done():
+                    yield cycle
+
+                cycle.result()
+
+        gen = pipeline()
+
+        def step() -> None:
             if state.done():
-                return None
+                return
 
             try:
-                next_future = next(self.futures)
+                pending = next(gen)
             except StopIteration:
-                state.set_result(None)
-                return None
+                state.try_set_result(None)
             except BaseException as e:
-                state.set_exception(e)
-                return None
-            return next_future
-
-        def _run_callbacks() -> None:
-            try:
-                while (future := _get_next_future()) is not None:
-                    # Wait for the future to finish.
-                    if not future.done():
-                        future.add_done_callback(_continuation_in_foreign_thread)
-                        return
-
-                    # Run the callback.
-                    if not _run_single_callback(future):
-                        return
-
-                    # Try to give control back to the event loop.
-                    next_cycle = get_loop().next_cycle()
-                    if not next_cycle.done():
-                        next_cycle.add_done_callback(_continuation_from_next_cycle)
-                        return
-
-                    # We do not have a real event loop here.
-                    # If the next_cycle causes an error to bubble, forward it to the state future.
-                    if next_cycle.exception() is not None:
-                        state.set_exception(next_cycle.exception())
-                        return
-            except Exception as e:
-                traceback.print_exception(e)
-                state.set_exception(e)
-
-        def _continuation_from_next_cycle(fut: Future[None]) -> None:
-            if fut.exception() is not None:
-                state.set_exception(fut.exception())
+                state.try_set_exception(e)
             else:
-                _run_callbacks()
+                pending.add_done_callback(lambda _: get_loop().from_thread(step) if not state.done() else None)
 
-        def _continuation_in_foreign_thread(fut: Future[T]) -> None:
-            # Optimization, see below.
-            get_loop().from_thread(_continuation, fut)
-
-        def _continuation(fut: Future[T]) -> None:
-            if _run_single_callback(fut):
-                _run_callbacks()
-
-        @keep_environment
-        def _run_single_callback(fut: Future[T]) -> bool:
-            # True   => Schedule next future.
-            # False  => Cancel the loop.
-            if state.done():
-                return False
-
-            try:
-                result = callback(fut)
-            except Exception as e:
-                state.set_exception(e)
-                return False
-            else:
-                if result is None or bool(result):
-                    return True
-                state.set_result(None)
-                return False
-
-        # Optimization:
-        # We do not need to inherit any kind of environment as
-        # _run_single_callback will automatically set the environment for us.
-        get_loop().from_thread(_run_callbacks)
+        get_loop().from_thread(step)
         return state
+
+    async def for_each(self, cb: Callable[[Future[T]], Any], *, yield_cycles: bool = True) -> None:
+        """
+        Consume the iterator sequentially in an async context, invoking `callback` for each future.
+
+        :param cb: Called for each completed `Future`.
+            Return `None` or a truthy value to continue; return a falsy value to stop iteration early.
+        :param yield_cycles: Whether to yield to the event loop between iterations via `EventLoop.next_cycle`.
+        """
+        cb = keep_environment(cb)
+        loop = get_loop()
+
+        for fut in self.futures:
+            if not fut.done():
+                waiter = Future[None]()
+                fut.add_done_callback(lambda _, w=waiter: w.set_result(None))
+                await loop.await_future(waiter)
+
+            res = cb(fut)
+            if res is not None and not bool(res):
+                break
+
+            if yield_cycles:
+                await loop.await_future(loop.next_cycle())
+
+    def as_completed(self, *, concurrency: int | None = None) -> AsyncIterator[Future[T]]:
+        """
+        Yield futures as they complete, maintaining at most `concurrency` in-flight requests.
+
+        :param concurrency: Maximum number of in-flight futures.
+            Defaults to `multiprocessing.cpu_count()` (minimum 1) if None.
+        :return: An async iterator yielding futures in order of completion.
+        """
+        return as_completed(self.futures, concurrency=concurrency)
 
     @classmethod
     def from_call[S, **P](
@@ -660,6 +646,69 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         :return: A `UnifiedIterator` wrapping the returned iterator.
         """
         return cls(func(*args, **kwargs))
+
+
+async def as_completed[S](
+    iterable: Iterable[Future[S]],
+    *,
+    concurrency: int | None = None,
+) -> AsyncIterator[UnifiedFuture[S]]:
+    """
+    Yield futures as they complete, maintaining at most `concurrency` in-flight requests.
+
+    This ensures bounded memory usage when processing long or infinite streams of futures
+    (e.g., video frames), while still yielding completed futures as soon as they become ready.
+
+    :param iterable: Iterable yielding futures to process.
+    :param concurrency: Maximum number of in-flight futures. Defaults to
+        `multiprocessing.cpu_count()` (minimum 1) if None.
+    :return: An async iterator yielding futures in order of completion.
+    """
+    if concurrency is None:
+        try:
+            concurrency = multiprocessing.cpu_count()
+        except NotImplementedError:
+            concurrency = 1
+
+    if concurrency <= 0:
+        raise ValueError("concurrency must be greater than 0")
+
+    iterator = iter(iterable)
+    done_queue = deque[Future[S]]()
+
+    waiter: UnifiedFuture[None] | None = None
+    in_flight = 0
+
+    def on_done(fut: Future[S]) -> None:
+        done_queue.append(fut)
+        if (w := waiter) is not None:
+            w.try_set_result(None)
+
+    def refill() -> None:
+        nonlocal in_flight
+
+        while in_flight < concurrency:
+            try:
+                fut = next(iterator)
+            except StopIteration:
+                break
+
+            in_flight += 1
+            fut.add_done_callback(on_done)
+
+    refill()
+
+    while in_flight > 0:
+        while not done_queue:
+            waiter = UnifiedFuture[None]()
+            if done_queue:
+                break
+            await waiter
+        waiter = None
+        finished = done_queue.popleft()
+        in_flight -= 1
+        refill()
+        yield UnifiedFuture.from_future(finished)
 
 
 class _UnifiedIteratorDecorator[U: UnifiedIterator[Any]](Protocol):
