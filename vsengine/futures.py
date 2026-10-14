@@ -16,7 +16,10 @@ from concurrent.futures import CancelledError, Future, InvalidStateError
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, suppress
 from functools import wraps
 from types import TracebackType
-from typing import Any, Literal, Protocol, Self, overload, override
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, overload, override
+
+if TYPE_CHECKING:
+    import trio
 
 from vsengine.loops import get_loop, keep_environment
 
@@ -394,6 +397,59 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
             )
         else:
             future.add_done_callback(receive)
+        return result
+
+    @classmethod
+    def from_trio_task[*Ts, S](
+        cls: type[UnifiedFutureLike[S]],
+        nursery: trio.Nursery,
+        async_fn: Callable[[*Ts], Awaitable[S]],
+        *args: *Ts,
+        trio_token: trio.lowlevel.TrioToken | None = None,
+    ) -> UnifiedFutureLike[S]:
+        """
+        Spawn `async_fn(*args)` in `nursery` and return a `UnifiedFuture` mirroring its outcome
+        with bidirectional cancellation.
+
+        :param nursery: Trio nursery to spawn the task in.
+        :param async_fn: Async callable to execute.
+        :param args: Positional arguments passed to `async_fn`.
+        :param trio_token: Token for scheduling thread-safe cancellation.
+            Defaults to the current Trio loop's token.
+        :return: A `UnifiedFuture` tracking the task's result, exception, and cancellation state.
+        """
+        import trio
+
+        result = cls()
+        token = trio_token or trio.lowlevel.current_trio_token()
+        cancel_scope = trio.CancelScope()
+
+        async def runner() -> None:
+            if result.cancelled():
+                return
+
+            try:
+                with cancel_scope:
+                    val = await async_fn(*args)
+            except trio.Cancelled:
+                result.cancel()
+                raise  # Always re-raise trio.Cancelled so Trio's nursery stays healthy
+            except BaseException as exc:
+                result.try_set_exception(exc)
+            else:
+                if cancel_scope.cancelled_caught:
+                    result.cancel()
+                else:
+                    result.try_set_result(val)
+
+        # Propagate cancellation from UnifiedFuture -> Trio CancelScope
+        def on_result_cancelled(f: Future[S]) -> None:
+            if f.cancelled():
+                with suppress(trio.RunFinishedError):
+                    token.run_sync_soon(cancel_scope.cancel)
+
+        result.add_done_callback(on_result_cancelled)
+        nursery.start_soon(runner)
         return result
 
     @classmethod

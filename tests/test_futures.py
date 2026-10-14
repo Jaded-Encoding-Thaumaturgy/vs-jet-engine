@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING, Any, Literal, Self, override
 
 import pytest
 import pytest_asyncio
+import pytest_mock
+import trio
+import trio.testing
 
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.futures import UnifiedFuture, UnifiedIterator, as_completed, unified
@@ -915,6 +918,115 @@ def test_unified_future_from_asyncio_concurrent_close_cancellation(monkeypatch: 
         assert uni.cancel() is True
     finally:
         loop.close()
+
+
+@pytest.mark.trio
+async def test_unified_future_from_trio_task_success(nursery: trio.Nursery) -> None:
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    fut = UnifiedFuture.from_trio_task(nursery, add, 10, 20)
+    wrapped_fut = WrappedUnifiedFuture.from_trio_task(nursery, add, 1, 2)
+
+    await trio.testing.wait_all_tasks_blocked()
+
+    assert fut.done() is True
+    assert fut.cancelled() is False
+    assert fut.result() == 30
+
+    assert wrapped_fut.done() is True
+    assert wrapped_fut.cancelled() is False
+    assert wrapped_fut.result() == 3
+    assert isinstance(wrapped_fut, WrappedUnifiedFuture)
+
+
+@pytest.mark.trio
+async def test_unified_future_from_trio_task_exception(nursery: trio.Nursery) -> None:
+    async def fail() -> None:
+        raise ValueError("trio task failed")
+
+    fut = UnifiedFuture.from_trio_task(nursery, fail)
+    await trio.testing.wait_all_tasks_blocked()
+
+    assert fut.done() is True
+    assert fut.cancelled() is False
+    exc = fut.exception()
+    assert isinstance(exc, ValueError)
+    assert str(exc) == "trio task failed"
+    with pytest.raises(ValueError, match="trio task failed"):
+        fut.result()
+
+
+@pytest.mark.trio
+async def test_unified_future_from_trio_task_pre_cancelled(nursery: trio.Nursery) -> None:
+    ran: bool = False
+
+    async def fn() -> int:
+        nonlocal ran
+        ran = True
+        return 42
+
+    fut = UnifiedFuture.from_trio_task(nursery, fn)
+    assert fut.cancel() is True
+    await trio.testing.wait_all_tasks_blocked()
+
+    assert ran is False
+    assert fut.cancelled() is True
+
+
+@pytest.mark.trio
+async def test_unified_future_from_trio_task_cancel_from_future(nursery: trio.Nursery) -> None:
+    started = trio.Event()
+
+    async def fn() -> int:
+        started.set()
+        await trio.sleep_forever()
+        return 42
+
+    fut = UnifiedFuture.from_trio_task(nursery, fn)
+    await started.wait()
+    assert fut.cancel() is True
+    await trio.testing.wait_all_tasks_blocked()
+
+    assert fut.cancelled() is True
+
+
+@pytest.mark.trio
+async def test_unified_future_from_trio_task_cancel_from_trio_outer() -> None:
+    started = trio.Event()
+
+    async def fn() -> None:
+        started.set()
+        await trio.sleep_forever()
+
+    fut: UnifiedFuture[None] | None = None
+    async with trio.open_nursery() as nursery:
+        fut = UnifiedFuture.from_trio_task(nursery, fn)
+        await started.wait()
+        nursery.cancel_scope.cancel()
+
+    assert fut is not None
+    assert fut.cancelled() is True
+
+
+def test_unified_future_from_trio_task_run_finished_suppressed(mocker: pytest_mock.MockerFixture) -> None:
+    token: trio.lowlevel.TrioToken | None = None
+
+    async def get_token() -> None:
+        nonlocal token
+        token = trio.lowlevel.current_trio_token()
+
+    trio.run(get_token)
+    assert token is not None
+
+    mock_nursery = mocker.MagicMock()
+
+    async def dummy() -> None:
+        pass
+
+    fut = UnifiedFuture.from_trio_task(mock_nursery, dummy, trio_token=token)
+    assert fut.cancel() is True
+    assert fut.cancelled() is True
 
 
 @pytest.mark.asyncio
