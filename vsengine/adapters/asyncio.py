@@ -93,22 +93,21 @@ class AsyncIOLoop(EventLoop):
             raise RuntimeError("No running asyncio event loop or loop is closed.")
 
         future = Future[R]()
+        ctx = contextvars.copy_context()
 
         async def run() -> None:
             if not future.set_running_or_notify_cancel():
                 return
 
             try:
-                result = await loop.run_in_executor(self._executor, partial(func, *args, **kwargs))
+                result = await loop.run_in_executor(self._executor, partial(ctx.run, func, *args, **kwargs))
             except BaseException as e:
                 future.set_exception(e)
             else:
                 future.set_result(result)
 
-        ctx = contextvars.copy_context()
-
         def schedule() -> None:
-            loop.create_task(run(), name=getattr(func, "__name__", None), context=ctx)
+            loop.create_task(run(), name=getattr(func, "__name__", None))
 
         try:
             running_loop = asyncio.get_running_loop()
