@@ -8,7 +8,8 @@ import asyncio
 import contextlib
 import contextvars
 from collections.abc import Callable, Generator
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from typing import override
 
 from vsengine.loops import Cancelled, EventLoop
@@ -19,11 +20,24 @@ class AsyncIOLoop(EventLoop):
     Bridges vs-engine to AsyncIO.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop | None = None,
+        *,
+        executor: ThreadPoolExecutor | None = None,
+        max_workers: int | None = None,
+    ) -> None:
         self._loop = loop
         if self._loop is None:
             with contextlib.suppress(RuntimeError):
                 self._loop = asyncio.get_running_loop()
+
+        self._executor = executor
+        if self._executor is None and max_workers is not None:
+            self._executor = ThreadPoolExecutor(max_workers, thread_name_prefix="vsengine-worker")
+            self._owns_executor = True
+        else:
+            self._owns_executor = False
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop | None:
@@ -46,6 +60,9 @@ class AsyncIOLoop(EventLoop):
 
     @override
     def detach(self) -> None:
+        if self._owns_executor and self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None
         self._loop = None
 
     def from_thread[**P, R](self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
@@ -82,7 +99,7 @@ class AsyncIOLoop(EventLoop):
                 return
 
             try:
-                result = await asyncio.to_thread(func, *args, **kwargs)
+                result = await loop.run_in_executor(self._executor, partial(func, *args, **kwargs))
             except BaseException as e:
                 future.set_exception(e)
             else:

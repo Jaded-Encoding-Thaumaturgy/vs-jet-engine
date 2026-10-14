@@ -12,15 +12,15 @@ import contextlib
 import contextvars
 import functools
 import threading
-import unittest.mock
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
-from concurrent.futures import CancelledError, Future
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from functools import wraps
 from inspect import isgenerator
 from typing import Any, Concatenate, Self
 
 import pytest
+import pytest_mock
 import trio
 
 from vsengine.adapters.asyncio import AsyncIOLoop
@@ -394,12 +394,12 @@ def test_to_thread_with_partial() -> None:
     asyncio.run(asyncio_main())
 
 
-def test_trio_detach_lifecycle() -> None:
+def test_trio_detach_lifecycle(mocker: pytest_mock.MockerFixture) -> None:
     """Ensure detach cleanly resets token and limiter."""
-    nursery = unittest.mock.MagicMock()
+    nursery = mocker.MagicMock()
     loop = TrioEventLoop(nursery)
-    loop.token = unittest.mock.MagicMock()
-    loop.limiter = unittest.mock.MagicMock()
+    loop.token = mocker.MagicMock()
+    loop.limiter = mocker.MagicMock()
 
     loop.detach()
     nursery.cancel_scope.cancel.assert_called_once()
@@ -457,3 +457,71 @@ def test_trio_to_thread_from_worker_thread() -> None:
             assert adapter.token
             adapter.token.run_sync_soon(cancel_scope_ref[0].cancel)
         thread.join(timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_asyncio_to_thread_with_max_workers() -> None:
+    """Ensure AsyncIOLoop creates and uses an owned ThreadPoolExecutor with max_workers."""
+    adapter = AsyncIOLoop(max_workers=2)
+    loop = asyncio.get_running_loop()
+
+    active_count = 0
+    max_active = 0
+    lock = threading.Lock()
+    release = threading.Event()
+    two_workers_running = asyncio.Event()
+
+    def worker() -> str:
+        nonlocal active_count, max_active
+        with lock:
+            active_count += 1
+            max_active = max(max_active, active_count)
+            if active_count == 2:
+                loop.call_soon_threadsafe(two_workers_running.set)
+
+        release.wait(timeout=2.0)
+        t_name = threading.current_thread().name
+
+        with lock:
+            active_count -= 1
+
+        return t_name
+
+    futs = [adapter.to_thread(worker) for _ in range(3)]
+
+    async with asyncio.timeout(delay=2.0):
+        await two_workers_running.wait()
+        await asyncio.sleep(0.01)
+
+    assert max_active == 2
+    release.set()
+
+    results = [await adapter.await_future(f) for f in futs]
+    for name in results:
+        assert name.startswith("vsengine-worker")
+
+
+@pytest.mark.asyncio
+async def test_asyncio_to_thread_with_custom_executor() -> None:
+    """Ensure AsyncIOLoop uses an external ThreadPoolExecutor and propagates contextvars."""
+    var = contextvars.ContextVar("test_asyncio_var", default="default")
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="custom-worker") as custom_executor:
+        adapter = AsyncIOLoop(executor=custom_executor)
+        var.set("custom_val")
+
+        fut = adapter.to_thread(lambda: (threading.current_thread().name, var.get()))
+        thread_name, context_val = await adapter.await_future(fut)
+        assert thread_name.startswith("custom-worker")
+        assert context_val == "custom_val"
+
+
+def test_asyncio_detach_lifecycle_external_executor() -> None:
+    """Ensure detach does not shut down an external executor."""
+    with ThreadPoolExecutor(max_workers=1) as custom_executor:
+        adapter = AsyncIOLoop(executor=custom_executor)
+        adapter.attach()
+        adapter.detach()
+
+        fut = custom_executor.submit(lambda: 42)
+        assert fut.result(timeout=1.0) == 42
