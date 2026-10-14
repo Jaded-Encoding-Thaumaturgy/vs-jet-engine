@@ -20,7 +20,10 @@ jobs:
         vapoursynth-version: [74, 75, 76, 77, 78, 79, 80, 81]
         python-version: ["3.12", "3.13", "3.14", "3.15"]
         include:
-          - vapoursynth-version: [80, 81]
+          - vapoursynth-version: 80
+            python-version: "3.15t"
+
+          - vapoursynth-version: 81
             python-version: "3.15t"
 
     steps:
