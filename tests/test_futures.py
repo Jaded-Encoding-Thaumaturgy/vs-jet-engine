@@ -14,6 +14,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, Self, override
 
 import pytest
+import pytest_asyncio
 
 from vsengine.adapters.asyncio import AsyncIOLoop
 from vsengine.futures import UnifiedFuture, UnifiedIterator, as_completed, unified
@@ -90,7 +91,7 @@ def ensure_no_loop() -> Generator[None]:
         set_loop(NO_LOOP)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def asyncio_loop() -> AsyncGenerator[None]:
     set_loop(AsyncIOLoop())
     try:
@@ -869,42 +870,51 @@ def test_unified_future_from_asyncio_foreign_thread_cancellation() -> None:
 
 def test_unified_future_from_asyncio_concurrent_close_done(monkeypatch: pytest.MonkeyPatch) -> None:
     loop = asyncio.new_event_loop()
-    fut = loop.create_future()
-    fut.set_result(123)
+    try:
+        fut = loop.create_future()
+        fut.set_result(123)
 
-    def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Event loop is closed")
+        def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("Event loop is closed")
 
-    monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
+        monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
 
-    uni = UnifiedFuture.from_future(fut)
-    assert uni.result() == 123
+        uni = UnifiedFuture.from_future(fut)
+        assert uni.result() == 123
+    finally:
+        loop.close()
 
 
 def test_unified_future_from_asyncio_concurrent_close_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
     loop = asyncio.new_event_loop()
-    fut = loop.create_future()
+    try:
+        fut = loop.create_future()
 
-    def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Event loop is closed")
+        def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("Event loop is closed")
 
-    monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
+        monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
 
-    uni = UnifiedFuture.from_future(fut)
-    assert uni.cancelled() is True
+        uni = UnifiedFuture.from_future(fut)
+        assert uni.cancelled() is True
+    finally:
+        loop.close()
 
 
 def test_unified_future_from_asyncio_concurrent_close_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
     loop = asyncio.new_event_loop()
-    fut = loop.create_future()
-    uni = UnifiedFuture.from_future(fut)
+    try:
+        fut = loop.create_future()
+        uni = UnifiedFuture.from_future(fut)
 
-    def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Event loop is closed")
+        def fake_call_soon_threadsafe(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("Event loop is closed")
 
-    monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
+        monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
 
-    assert uni.cancel() is True
+        assert uni.cancel() is True
+    finally:
+        loop.close()
 
 
 @pytest.mark.asyncio
