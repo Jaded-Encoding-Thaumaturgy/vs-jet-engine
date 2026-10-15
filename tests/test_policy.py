@@ -7,10 +7,13 @@
 
 import contextlib
 import gc
+import inspect
+import logging
 import weakref
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import suppress
+from pathlib import Path
 
 import pytest
 import vapoursynth
@@ -178,3 +181,43 @@ class TestManagedEnvironment:
         finally:
             env1.dispose()
             env2.dispose()
+
+
+class TestPolicyLogger:
+    """Tests for Policy logger functionality."""
+
+    def test_default_logger(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="vapoursynth")
+
+        with Policy(logger=True) as policy, policy.new_environment() as env, env.use():
+            frame = inspect.currentframe()
+            assert frame is not None
+            expected_line = frame.f_lineno + 1
+            env.core.log_message(vapoursynth.MessageType.MESSAGE_TYPE_INFORMATION, "default logger info message")
+
+        records = [r for r in caplog.records if r.name == "vapoursynth"]
+        assert len(records) == 1
+
+        record = records[0]
+        assert record.levelno == logging.INFO
+        assert record.levelname == "INFO"
+        assert record.message == "default logger info message"
+        assert Path(record.pathname).resolve() == Path(__file__).resolve()
+        assert record.filename == Path(__file__).name
+        assert record.lineno == expected_line
+
+    def test_custom_logger(self, mocker: MockerFixture) -> None:
+        mock_logger = mocker.MagicMock()
+
+        with Policy(logger=mock_logger) as policy, policy.new_environment() as env, env.use():
+            env.core.log_message(vapoursynth.MessageType.MESSAGE_TYPE_WARNING, "custom warning message")
+
+        mock_logger.assert_called_once_with(int(vapoursynth.MessageType.MESSAGE_TYPE_WARNING), "custom warning message")
+
+    def test_default_logger_disabled(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="vapoursynth")
+
+        with Policy() as policy, policy.new_environment() as env, env.use():
+            env.core.log_message(vapoursynth.MessageType.MESSAGE_TYPE_INFORMATION, "should not be logged")
+
+        assert not [r for r in caplog.records if r.name == "vapoursynth"]

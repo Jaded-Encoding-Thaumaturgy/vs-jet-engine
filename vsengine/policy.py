@@ -10,13 +10,13 @@ allowing you to manage multiple VapourSynth environments within a single applica
 
 from __future__ import annotations
 
+import logging
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
-from logging import getLogger
-from types import MappingProxyType, TracebackType
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Self, override
 from weakref import ReferenceType, ref
 
@@ -27,6 +27,7 @@ from vapoursynth import (
     EnvironmentData,
     EnvironmentPolicy,
     EnvironmentPolicyAPI,
+    MessageType,
     VideoOutputTuple,
     core,
     get_outputs,
@@ -39,7 +40,16 @@ from ._hospice import admit_environment
 __all__ = ["ContextVarStore", "GlobalStore", "ManagedEnvironment", "Policy", "ThreadLocalStore"]
 
 
-logger = getLogger(__name__)
+logger = logging.getLogger(__name__)
+mod_logger = logger
+
+VS_LOG_LEVEL_MAP: dict[MessageType, int] = {
+    MessageType.MESSAGE_TYPE_DEBUG: logging.DEBUG,
+    MessageType.MESSAGE_TYPE_INFORMATION: logging.INFO,
+    MessageType.MESSAGE_TYPE_WARNING: logging.WARNING,
+    MessageType.MESSAGE_TYPE_CRITICAL: logging.ERROR,
+    MessageType.MESSAGE_TYPE_FATAL: logging.FATAL,
+}
 
 
 class EnvironmentStore(ABC):
@@ -233,7 +243,7 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(self, *_: object) -> None:
         self.dispose()
 
     @property
@@ -347,9 +357,12 @@ class Policy(AbstractContextManager["Policy"]):
     makes sure policies are being unregistered when leaving a block.
     """
 
-    _managed: _ManagedPolicy
-
-    def __init__(self, store: EnvironmentStore | None = None, flags_creation: int | None = None) -> None:
+    def __init__(
+        self,
+        store: EnvironmentStore | None = None,
+        flags_creation: int | None = None,
+        logger: bool | Callable[[int, str], None] = False,
+    ) -> None:
         """
         Initializes a new Policy
 
@@ -357,15 +370,17 @@ class Policy(AbstractContextManager["Policy"]):
             store: The store to use for managing environments. If None, defaults to a GlobalStore.
             flags_creation: The flags to use when creating environments.
                             See vapoursynth.CoreCreationFlags for more information.
+            logger: Set a logger for all created environments.
         """
         self._managed = _ManagedPolicy(store or GlobalStore())
         self.flags_creation = flags_creation or 0
+        self._logger = _get_default_logger() if logger is True else logger if callable(logger) else None
 
     def __enter__(self) -> Self:
         self.register()
         return self
 
-    def __exit__(self, _: type[BaseException] | None, __: BaseException | None, ___: TracebackType | None) -> None:
+    def __exit__(self, *_: object) -> None:
         self.unregister()
 
     @property
@@ -405,7 +420,11 @@ class Policy(AbstractContextManager["Policy"]):
         """
         self._managed.api.unregister_policy()
 
-    def new_environment(self, flags_creation: int | None = None) -> ManagedEnvironment:
+    def new_environment(
+        self,
+        flags_creation: int | None = None,
+        logger: bool | Callable[[int, str], None] = False,
+    ) -> ManagedEnvironment:
         """
         Creates a new VapourSynth core.
 
@@ -419,12 +438,37 @@ class Policy(AbstractContextManager["Policy"]):
             flags_creation: The flags to use when creating the environment.
                             See vapoursynth.CoreCreationFlags for more information.
                             Defaults to the flags used when creating this policy.
+            logger: Set a logger for this environments. Default to the logger passed when creating this policy.
         Returns:
             A new ManagedEnvironment.
         """
         data = self.api.create_environment(flags_creation if flags_creation is not None else self.flags_creation)
         env = self.api.wrap_environment(data)
 
+        vslogger = (
+            _get_default_logger()
+            if logger is True
+            else logger
+            if callable(logger)
+            else self._logger
+            if self._logger is not None
+            else None
+        )
+
+        if vslogger is not None:
+            self.api.set_logger(data, vslogger)
+
         menv = ManagedEnvironment(env, data, self)
-        logger.debug("Successfully created new environment %r", data)
+        mod_logger.debug("Successfully created new environment %r", data)
         return menv
+
+
+def _get_default_logger() -> Callable[[int, str], None]:
+    vslogger = logging.getLogger("vapoursynth")
+
+    return lambda mt, msg: vslogger.log(
+        VS_LOG_LEVEL_MAP[MessageType(mt)],
+        msg,
+        exc_info=mt >= MessageType.MESSAGE_TYPE_CRITICAL,
+        stacklevel=2,
+    )
