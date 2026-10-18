@@ -317,6 +317,9 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
         - Do not use __enter__ and __exit__ directly.
         - This function is not reentrant.
         """
+        if self.disposed:
+            raise RuntimeError("Environment has been disposed.")
+
         self._policy.managed.inline_section_start(self._data)
         try:
             yield
