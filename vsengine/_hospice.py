@@ -81,6 +81,7 @@ def _add_tostage1(ident: int) -> None:
     logger.debug("Environment has died. Keeping core for a few gc-cycles. ID:%s", ident)
 
     with lock:
+        refnanny.pop(ident, None)
         stage1.add(ident)
 
 
@@ -110,6 +111,7 @@ def _collectstage2(phase: Literal["start", "stop"], _: dict[str, int]) -> None:
                 continue
 
             stage2.remove(ident)
+            refnanny.pop(ident, None)
             if ident in cores:
                 garbage.append(cores.pop(ident))
             logger.debug("Marking core %r for collection", ident)
