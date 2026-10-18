@@ -271,12 +271,12 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
 
     @overload
     @unified(kind="future")
-    def get_variable(self, name: str) -> Future[Any]: ...
+    def get_variable(self, name: str) -> UnifiedFuture[Any]: ...
     @overload
     @unified(kind="future")
-    def get_variable[T](self, name: str, default: T) -> Future[Any | T]: ...
+    def get_variable[T](self, name: str, default: T) -> UnifiedFuture[Any | T]: ...
     @unified(kind="future")
-    def get_variable(self, name: str, default: Any = _missing) -> Future[Any]:
+    def get_variable(self, name: str, default: Any = _missing) -> UnifiedFuture[Any]:
         """
         Retrieve a variable from the script's module.
 
@@ -284,9 +284,15 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
         :param default: The default value if the variable is not found.
         :return: A future that resolves to the variable's value.
         """
-        return UnifiedFuture[Any].resolve(
-            getattr(self.module, name) if default is _missing else getattr(self.module, name, default)
-        )
+
+        def lookup(_: Future[None] | None = None) -> Any:
+            return getattr(self.module, name) if default is _missing else getattr(self.module, name, default)
+
+        with self._lock:
+            if hasattr(self, "_future") and not self._future.done():
+                return UnifiedFuture.from_future(self._future).map(lookup)
+
+        return UnifiedFuture.from_call(lookup)
 
     def _run_inline(self) -> None:
         with (

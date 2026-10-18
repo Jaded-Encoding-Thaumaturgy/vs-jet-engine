@@ -319,27 +319,27 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
     @classmethod
     def from_call[S, **P](
         cls: type[UnifiedFutureLike[S]],
-        func: Callable[P, Future[S]],
+        func: Callable[P, Future[S]] | Callable[P, S],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> UnifiedFutureLike[S]:
         """
-        Call `func` and wrap the returned `Future` as a `UnifiedFuture`.
+        Call `func` and wrap the returned result as a `UnifiedFuture`.
 
         Any exception raised synchronously by `func` is captured and stored as a rejection
-        on the returned future rather than propagating to the caller.
+        on the returned result rather than propagating to the caller.
 
-        :param func: A callable that returns a `Future`.
+        :param func: A callable that returns a `Future` or a result.
         :param args: Positional arguments forwarded to `func`.
         :param kwargs: Keyword arguments forwarded to `func`.
         :return: A `UnifiedFuture` that mirrors the result of `func`.
         """
         try:
-            future = func(*args, **kwargs)
+            res = func(*args, **kwargs)
         except Exception as e:
             return cls.reject(e)
 
-        return cls.from_future(future)
+        return cls.from_future(res) if isinstance(res, Future) else cls.resolve(res)
 
     @classmethod
     def from_future[S](cls: type[UnifiedFutureLike[S]], future: Future[S] | asyncio.Future[S]) -> UnifiedFutureLike[S]:
