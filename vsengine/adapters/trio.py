@@ -183,7 +183,11 @@ class TrioEventLoop(EventLoop):
 
         future.add_done_callback(_when_done)
 
-        await event.wait()
+        try:
+            await event.wait()
+        except trio.Cancelled:
+            future.cancel()
+            raise
 
         try:
             return future.result()
