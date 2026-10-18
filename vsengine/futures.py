@@ -667,8 +667,8 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
 
         for fut in self.futures:
             if not fut.done():
-                waiter = Future[None]()
-                fut.add_done_callback(lambda _, w=waiter: w.set_result(None))
+                waiter = UnifiedFuture[None]()
+                fut.add_done_callback(lambda _, w=waiter: w.try_set_result(None))
                 await loop.await_future(waiter)
 
             res = cb(fut)
