@@ -131,7 +131,7 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
     # Adding callbacks
     @override
-    def add_done_callback(self, fn: Callable[[Future[T]], Any]) -> None:
+    def add_done_callback(self, fn: Callable[[UnifiedFuture[T]], Any] | Callable[[Future[T]], Any]) -> None:
         """
         Register a callback to be called when this future completes.
 
@@ -140,8 +140,13 @@ class UnifiedFuture[T](Future[T], AbstractContextManager[Any], AbstractAsyncCont
 
         :param fn: A callable that receives the completed future.
         """
+
         # The done_callback should inherit the environment of the current call.
-        super().add_done_callback(keep_environment(fn))
+        @keep_environment
+        def cb(f: Future[T]) -> None:
+            fn(self.from_future(f))
+
+        super().add_done_callback(cb)
 
     def add_loop_callback(
         self,
