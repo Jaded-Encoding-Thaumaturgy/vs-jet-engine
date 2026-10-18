@@ -133,14 +133,22 @@ class _ModifiedArgv0(AbstractContextManager[None]):
 
     def __init__(self, value: Any) -> None:
         self.value = str(value)
-        self._saved_value = ""
+        self._saved_value: str | None = None
+        self._appended = False
 
     def __enter__(self) -> None:
-        self._saved_value = sys.argv[0]
-        sys.argv[0] = self.value
+        if sys.argv:
+            self._saved_value = sys.argv[0]
+            sys.argv[0] = self.value
+        else:
+            sys.argv.append(self.value)
+            self._appended = True
 
     def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
-        sys.argv[0] = self._saved_value
+        if self._appended:
+            sys.argv.clear()
+        elif self._saved_value is not None:
+            sys.argv[0] = self._saved_value
 
 
 def _set_module_dunders(module: ModuleType, filename: str) -> None:
