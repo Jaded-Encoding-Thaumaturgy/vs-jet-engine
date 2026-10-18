@@ -1120,44 +1120,93 @@ def test_concurrent_cancellation_and_resolution() -> None:
 
 # for_each and as_completed tests
 @pytest.mark.asyncio
-async def test_for_each_success(asyncio_loop: None) -> None:
-    futs = [resolve(1), resolve(2), resolve(3)]
-    results = list[int]()
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("yield_cycles", [False, True], ids=["no_yield", "yield"])
+async def test_for_each_consumption(asyncio_loop: None, is_async: bool, yield_cycles: bool) -> None:
+    pending = Future[int]()
+    futs = [resolve(1), pending, resolve(3)]
 
-    await UnifiedIterator(iter(futs)).for_each(lambda f: results.append(f.result()))
+    asyncio.get_running_loop().call_soon(pending.set_result, 2)
+
+    results = list[int]()
+    types = list[type]()
+
+    if is_async:
+
+        async def cb(f: UnifiedFuture[int]) -> None:
+            await asyncio.sleep(0.001)
+            types.append(type(f))
+            results.append(f.result())
+    else:
+
+        def cb(f: UnifiedFuture[int]) -> None:
+            types.append(type(f))
+            results.append(f.result())
+
+    await UnifiedIterator(futs).for_each(cb, yield_cycles=yield_cycles)
     assert results == [1, 2, 3]
+    assert types == [UnifiedFuture, UnifiedFuture, UnifiedFuture]
 
 
 @pytest.mark.asyncio
-async def test_for_each_early_stop(asyncio_loop: None) -> None:
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_for_each_early_stop(asyncio_loop: None, is_async: bool) -> None:
     futs = [resolve(1), resolve(2), resolve(3)]
     results = list[int]()
 
-    def cb(f: Future[int]) -> bool:
-        results.append(f.result())
-        return False  # early stop
+    if is_async:
+
+        async def cb(f: UnifiedFuture[int]) -> bool | None:
+            results.append(f.result())
+            return False if len(results) == 2 else None
+    else:
+
+        def cb(f: UnifiedFuture[int]) -> bool | None:
+            results.append(f.result())
+            return False if len(results) == 2 else None
 
     await UnifiedIterator(futs).for_each(cb)
-    assert results == [1]
+    assert results == [1, 2]
 
 
 @pytest.mark.asyncio
 async def test_for_each_forwards_errors(asyncio_loop: None) -> None:
     f1 = Future[int]()
     f2 = resolve(2)
-    f1.set_exception(RuntimeError("test error"))
+
+    asyncio.get_running_loop().call_soon(f1.set_exception, RuntimeError("test error"))
+
     errors = list[BaseException]()
     results = list[int]()
 
-    def cb(f: Future[int]) -> None:
+    def cb(f: UnifiedFuture[int]) -> None:
         if exc := f.exception():
             errors.append(exc)
         else:
             results.append(f.result())
 
-    await UnifiedIterator(iter([f1, f2])).for_each(cb)
+    await UnifiedIterator([f1, f2]).for_each(cb)
     assert len(errors) == 1
     assert results == [2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_for_each_callback_exception(asyncio_loop: None, is_async: bool) -> None:
+    futs = [resolve(1), resolve(2)]
+
+    if is_async:
+
+        async def cb(f: UnifiedFuture[int]) -> None:
+            await asyncio.sleep(0.001)
+            raise ValueError("async callback error")
+    else:
+
+        def cb(f: UnifiedFuture[int]) -> None:
+            raise ValueError("sync callback error")
+
+    with pytest.raises(ValueError, match="callback error"):
+        await UnifiedIterator(futs).for_each(cb)
 
 
 @pytest.mark.asyncio

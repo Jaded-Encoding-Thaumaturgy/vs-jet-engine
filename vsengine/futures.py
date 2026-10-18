@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 __lazy_modules__ = ["asyncio", "multiprocessing"]
+
 import asyncio
 import contextvars
+import inspect
 import multiprocessing
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
@@ -653,24 +655,33 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         get_loop().from_thread(step)
         return state
 
-    async def for_each(self, cb: Callable[[Future[T]], Any], *, yield_cycles: bool = True) -> None:
+    async def for_each(
+        self,
+        callback: Callable[[UnifiedFuture[T]], Awaitable[Any] | Any],
+        *,
+        yield_cycles: bool = True,
+    ) -> None:
         """
         Consume the iterator sequentially in an async context, invoking `callback` for each future.
 
-        :param cb: Called for each completed `Future`.
+        :param callback: Called for each completed `Future`.
             Return `None` or a truthy value to continue; return a falsy value to stop iteration early.
         :param yield_cycles: Whether to yield to the event loop between iterations via `EventLoop.next_cycle`.
         """
-        cb = keep_environment(cb)
+        callback = keep_environment(callback)
         loop = get_loop()
 
         for fut in self.futures:
             if not fut.done():
                 waiter = UnifiedFuture[None]()
                 fut.add_done_callback(lambda _, w=waiter: w.try_set_result(None))
-                await loop.await_future(waiter)
+                await waiter
 
-            res = cb(fut)
+            res = callback(UnifiedFuture.from_future(fut))
+
+            if inspect.isawaitable(res):
+                res = await res
+
             if res is not None and not bool(res):
                 break
 
