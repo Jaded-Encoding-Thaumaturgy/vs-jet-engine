@@ -148,7 +148,7 @@ def close_when_needed[FrameT: RawFrame](future_iterable: Iterable[Future[FrameT]
                 return
 
             try:
-                new_r = target.result().__enter__()
+                new_r = target.result()
             except BaseException as e:
                 f.set_exception(e)
             else:
@@ -158,5 +158,7 @@ def close_when_needed[FrameT: RawFrame](future_iterable: Iterable[Future[FrameT]
         return f
 
     for fut in future_iterable:
-        yield wrap_open_future(fut)
-        fut.add_done_callback(lambda f: f.result().__exit__() if not f.cancelled() and f.exception() is None else None)
+        try:
+            yield wrap_open_future(fut)
+        finally:
+            fut.add_done_callback(lambda f: f.result().close() if not f.cancelled() and f.exception() is None else None)
