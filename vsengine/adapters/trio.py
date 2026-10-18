@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 from collections.abc import Callable, Generator
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from typing import override
 
 import trio
@@ -196,5 +196,5 @@ class TrioEventLoop(EventLoop):
     def wrap_cancelled(self) -> Generator[None]:
         try:
             yield
-        except Cancelled:
-            raise trio.Cancelled.__new__(trio.Cancelled) from None
+        except (Cancelled, CancelledError):
+            raise trio.Cancelled._create(source="explicit") from None
