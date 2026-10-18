@@ -6,6 +6,7 @@
 
 """This module provides an abstraction layer to integrate VapourSynth with any event loop (asyncio, Qt, Trio, etc.)."""
 
+import contextvars
 import threading
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Generator
@@ -81,13 +82,14 @@ class EventLoop:
         :return: A Future representing the execution result.
         """
         fut = Future[R]()
+        ctx = contextvars.copy_context()
 
         def wrapper() -> None:
             if not fut.set_running_or_notify_cancel():
                 return
 
             try:
-                result = func(*args, **kwargs)
+                result = ctx.run(func, *args, **kwargs)
             except BaseException as e:
                 fut.set_exception(e)
             else:
