@@ -673,7 +673,7 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
             if yield_cycles:
                 await loop.await_future(loop.next_cycle())
 
-    def as_completed(self, *, concurrency: int | None = None) -> AsyncIterator[Future[T]]:
+    def as_completed(self, *, concurrency: int | None = None) -> AsyncIterator[UnifiedFuture[T]]:
         """
         Yield futures as they complete, maintaining at most `concurrency` in-flight requests.
 
@@ -728,6 +728,7 @@ async def as_completed[S](
 
     iterator = iter(iterable)
     done_queue = deque[Future[S]]()
+    active_futures = set[Future[S]]()
 
     waiter: UnifiedFuture[None] | None = None
     in_flight = 0
@@ -747,21 +748,27 @@ async def as_completed[S](
                 break
 
             in_flight += 1
+            active_futures.add(fut)
             fut.add_done_callback(on_done)
 
     refill()
 
-    while in_flight > 0:
-        while not done_queue:
-            waiter = UnifiedFuture[None]()
-            if done_queue:
-                break
-            await waiter
-        waiter = None
-        finished = done_queue.popleft()
-        in_flight -= 1
-        refill()
-        yield UnifiedFuture.from_future(finished)
+    try:
+        while in_flight > 0:
+            while not done_queue:
+                waiter = UnifiedFuture[None]()
+                if done_queue:
+                    break
+                await waiter
+            waiter = None
+            finished = done_queue.popleft()
+            active_futures.remove(finished)
+            in_flight -= 1
+            refill()
+            yield UnifiedFuture.from_future(finished)
+    finally:
+        for fut in active_futures:
+            fut.cancel()
 
 
 class _UnifiedIteratorDecorator[U: UnifiedIterator[Any]](Protocol):
