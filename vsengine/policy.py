@@ -183,15 +183,10 @@ class _ManagedPolicy(EnvironmentPolicy):
             if current_environment is None:
                 return None
 
-            if current_environment() is None:
+            if (received_environment := current_environment()) is None:
                 logger.warning("Environment reference from store resolved to dead object: %r", current_environment)
                 self._store.set_current_environment(None)
                 return None
-
-            received_environment = current_environment()
-
-            if TYPE_CHECKING:
-                assert received_environment
 
             if not self.is_alive(received_environment):
                 logger.warning(
