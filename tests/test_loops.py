@@ -5,8 +5,10 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests for the event loop API."""
 
+import asyncio
 import contextlib
 import contextvars
+import inspect
 import queue
 import threading
 from collections.abc import Callable, Generator
@@ -16,7 +18,17 @@ from typing import Any, NamedTuple, NoReturn, override
 import pytest
 import vapoursynth
 
-from vsengine.loops import NO_LOOP, Cancelled, EventLoop, _NoEventLoop, from_thread, get_loop, set_loop, to_thread
+from vsengine.loops import (
+    NO_LOOP,
+    Cancelled,
+    EventLoop,
+    _NoEventLoop,
+    from_thread,
+    get_loop,
+    keep_environment,
+    set_loop,
+    to_thread,
+)
 from vsengine.policy import Policy, ThreadLocalStore
 
 
@@ -165,3 +177,64 @@ def test_loop_to_thread_copies_context() -> None:
 
     fut = to_thread(check_context)
     assert fut.result(timeout=0.1) == "custom_val"
+
+
+def test_keep_environment_sync_retains_environment() -> None:
+    def test() -> vapoursynth.Environment:
+        return vapoursynth.get_current_environment()
+
+    with Policy() as p, p.new_environment() as env1, p.new_environment() as env2:
+        with env1.use():
+            wrapped = keep_environment(test)
+
+        assert not inspect.iscoroutinefunction(wrapped)
+        with env2.use():
+            assert vapoursynth.get_current_environment() == env2.vs_environment
+            assert wrapped() == env1.vs_environment
+
+
+def test_keep_environment_sync_without_environment() -> None:
+    def test() -> int:
+        return 42
+
+    wrapped = keep_environment(test)
+    assert not inspect.iscoroutinefunction(wrapped)
+    assert wrapped() == 42
+
+
+@pytest.mark.asyncio
+async def test_keep_environment_async_retains_environment() -> None:
+    async def test() -> vapoursynth.Environment:
+        await asyncio.sleep(0.001)
+        return vapoursynth.get_current_environment()
+
+    with Policy() as p, p.new_environment() as env1, p.new_environment() as env2:
+        with env1.use():
+            wrapped = keep_environment(test)
+
+        assert inspect.iscoroutinefunction(wrapped)
+        with env2.use():
+            assert vapoursynth.get_current_environment() == env2.vs_environment
+            assert await wrapped() == env1.vs_environment
+
+
+@pytest.mark.asyncio
+async def test_keep_environment_async_without_environment() -> None:
+    async def test() -> int:
+        await asyncio.sleep(0.001)
+        return 42
+
+    wrapped = keep_environment(test)
+    assert inspect.iscoroutinefunction(wrapped)
+    assert await wrapped() == 42
+
+
+@pytest.mark.asyncio
+async def test_keep_environment_async_exception() -> None:
+    async def test() -> None:
+        await asyncio.sleep(0.001)
+        raise ValueError("async failure")
+
+    wrapped = keep_environment(test)
+    with pytest.raises(ValueError, match="async failure"):
+        await wrapped()

@@ -7,13 +7,14 @@
 """This module provides an abstraction layer to integrate VapourSynth with any event loop (asyncio, Qt, Trio, etc.)."""
 
 import contextvars
+import inspect
 import threading
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Generator
 from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager
 from functools import wraps
-from typing import override
+from typing import Any, overload, override
 
 import vapoursynth as vs
 
@@ -198,7 +199,11 @@ def set_loop(loop: EventLoop) -> None:
         raise
 
 
-def keep_environment[**P, R](func: Callable[P, R]) -> Callable[P, R]:
+@overload
+def keep_environment[**P, R](func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]: ...
+@overload
+def keep_environment[**P, R](func: Callable[P, R]) -> Callable[P, R]: ...
+def keep_environment[**P, R](func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorate a function to preserve the VapourSynth environment.
 
@@ -215,11 +220,16 @@ def keep_environment[**P, R](func: Callable[P, R]) -> Callable[P, R]:
         environment = _noop
 
     @wraps(func)
-    def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+        with environment():
+            return await func(*args, **kwargs)
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
         with environment():
             return func(*args, **kwargs)
 
-    return _wrapper
+    return async_wrapper if inspect.iscoroutinefunction(func) else wrapper
 
 
 def from_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
