@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
@@ -342,9 +343,7 @@ class ManagedEnvironment(AbstractContextManager["ManagedEnvironment"]):
         if self.disposed:
             return
 
-        import warnings
-
-        warnings.warn(f"Disposing {self!r} inside __del__. This might cause leaks.", ResourceWarning)
+        warnings.warn(f"Disposing {self!r} inside __del__. This might cause leaks.", ResourceWarning, stacklevel=2)
         self.dispose()
 
 
