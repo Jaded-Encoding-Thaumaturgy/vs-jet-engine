@@ -73,9 +73,7 @@ class WrapAllErrors(AbstractContextManager[None]):
     def __enter__(self) -> None: ...
 
     def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
-        if isinstance(val, ExecutionError):
-            raise val
-        if val is not None:
+        if val is not None and not isinstance(val, ExecutionError):
             raise ExecutionError(val) from None
 
 
