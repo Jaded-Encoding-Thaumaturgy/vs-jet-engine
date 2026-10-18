@@ -54,7 +54,7 @@ def any_alive() -> bool:
 
 
 def freeze() -> None:
-    logger.debug("Freezing the hospice. Cores won't be collected anyore.")
+    logger.debug("Freezing the hospice. Cores won't be collected anymore.")
 
     with lock:
         hold.update(stage1)
