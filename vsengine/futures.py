@@ -6,12 +6,11 @@
 from __future__ import annotations
 
 __lazy_modules__ = ["asyncio", "multiprocessing"]
-
 import asyncio
 import contextvars
 import multiprocessing
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
 from concurrent.futures import CancelledError, Future, InvalidStateError
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, suppress
 from functools import wraps
@@ -710,7 +709,7 @@ async def as_completed[S](
     iterable: Iterable[Future[S]],
     *,
     concurrency: int | None = None,
-) -> AsyncIterator[UnifiedFuture[S]]:
+) -> AsyncGenerator[UnifiedFuture[S]]:
     """
     Yield futures as they complete, maintaining at most `concurrency` in-flight requests.
 
