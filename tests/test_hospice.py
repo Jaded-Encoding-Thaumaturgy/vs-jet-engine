@@ -17,7 +17,7 @@ import pytest
 from pytest_mock import MockerFixture
 from vapoursynth import Core, EnvironmentData
 
-from vsengine._hospice import admit_environment, any_alive, freeze, unfreeze
+import vsengine._hospice as hospices
 
 
 @pytest.fixture(autouse=True)
@@ -67,7 +67,7 @@ def test_hospice_delays_connection(
     o2 = fake_core_factory()
     o2_r = weakref.ref(o2)
 
-    admit_environment(o1, o2)
+    hospices.admit_environment(o1, o2)
 
     # Remove local ref to o2, but registry still holds it
     del o2
@@ -97,7 +97,7 @@ def test_hospice_is_delayed_on_alive_objects(
     o2 = fake_core_factory()
     o2r = weakref.ref(o2)
 
-    admit_environment(o1, o2)
+    hospices.admit_environment(o1, o2)
     del o1
 
     # o2 is still held by local var AND registry, so refcount > 3
@@ -126,12 +126,14 @@ def test_hospice_reports_alive_objects_correctly(
 ) -> None:
     o1 = fake_data_factory()
     o2 = fake_core_factory()
-    admit_environment(o1, o2)
+    hospices.admit_environment(o1, o2)
     del o1
 
     # o2 is still alive (local var + registry)
     with hide_logs():
-        assert any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true."
+        assert hospices.any_alive(), (
+            "The hospice did report that all objects are not alive anymore. This is obviously not true."
+        )
 
     # Delete local ref but keep registry - still delays as "alive" due to CoreTimings-like ref
     del o2
@@ -139,7 +141,9 @@ def test_hospice_reports_alive_objects_correctly(
     # Now clear the registry to allow collection
     mock_timings_registry.clear()
 
-    assert not any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true."
+    assert not hospices.any_alive(), (
+        "The hospice did report that there are some objects left alive. This is obviously not true."
+    )
 
 
 def test_hospice_can_forget_about_cores_safely(
@@ -148,17 +152,23 @@ def test_hospice_can_forget_about_cores_safely(
 ) -> None:
     o1 = fake_data_factory()
     o2 = fake_core_factory()
-    admit_environment(o1, o2)
+    hospices.admit_environment(o1, o2)
     del o1
 
     with hide_logs():
-        assert any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true."
-    freeze()
-    assert not any_alive(), "The hospice did report that there are some objects left alive. This is obviously not true."
+        assert hospices.any_alive(), (
+            "The hospice did report that all objects are not alive anymore. This is obviously not true."
+        )
+    hospices.freeze()
+    assert not hospices.any_alive(), (
+        "The hospice did report that there are some objects left alive. This is obviously not true."
+    )
 
-    unfreeze()
+    hospices.unfreeze()
     with hide_logs():
-        assert any_alive(), "The hospice did report that all objects are not alive anymore. This is obviously not true."
+        assert hospices.any_alive(), (
+            "The hospice did report that all objects are not alive anymore. This is obviously not true."
+        )
     del o2
     mock_timings_registry.clear()
 
@@ -172,13 +182,13 @@ def test_hospice_concurrent_access(
     def worker(i: int) -> None:
         env = fake_data_factory()
         core = fake_core_factory()
-        admit_environment(env, core)
+        hospices.admit_environment(env, core)
         del env
         if i % 3 == 0:
-            freeze()
-            unfreeze()
+            hospices.freeze()
+            hospices.unfreeze()
         elif i % 3 == 1:
-            _ = any_alive()
+            _ = hospices.any_alive()
         else:
             gc.collect()
 
@@ -187,3 +197,22 @@ def test_hospice_concurrent_access(
 
     mock_timings_registry.clear()
     gc.collect()
+
+
+def test_hospice_refnanny_cleanup(
+    fake_data_factory: Callable[[], EnvironmentData],
+    fake_core_factory: Callable[[], Core],
+) -> None:
+    data = fake_data_factory()
+    data_ref = weakref.ref(data)
+    core = fake_core_factory()
+
+    hospices.admit_environment(data, core)
+    assert any(r() is data for r in hospices.refnanny.values())
+
+    del data
+    mock_timings_registry.clear()
+    gc.collect()
+
+    assert data_ref() is None
+    assert len(hospices.refnanny) == 0

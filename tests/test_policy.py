@@ -182,6 +182,21 @@ class TestManagedEnvironment:
             env1.dispose()
             env2.dispose()
 
+    def test_dispose_destroyed_environment(self, registered_policy: Policy) -> None:
+        env = registered_policy.new_environment()
+        data = env._data
+        registered_policy.api.destroy_environment(data)
+        # Calling dispose on an environment whose underlying VapourSynth data was already destroyed
+        # should not crash accessing core when dead, and should cleanly set disposed = True.
+        env.dispose()
+        assert env.disposed
+        with pytest.raises(RuntimeError, match="disposed"):
+            _ = env.core
+        with pytest.raises(RuntimeError, match="disposed"):
+            _ = env.outputs
+        with pytest.raises(RuntimeError, match="disposed"), env.inline_section():
+            ...
+
 
 class TestPolicyLogger:
     """Tests for Policy logger functionality."""
@@ -218,6 +233,14 @@ class TestPolicyLogger:
         caplog.set_level(logging.DEBUG, logger="vapoursynth")
 
         with Policy() as policy, policy.new_environment() as env, env.use():
+            env.core.log_message(vapoursynth.MessageType.MESSAGE_TYPE_INFORMATION, "should not be logged")
+
+        assert not [r for r in caplog.records if r.name == "vapoursynth"]
+
+    def test_environment_logger_override_false(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="vapoursynth")
+
+        with Policy(logger=True) as policy, policy.new_environment(logger=False) as env, env.use():
             env.core.log_message(vapoursynth.MessageType.MESSAGE_TYPE_INFORMATION, "should not be logged")
 
         assert not [r for r in caplog.records if r.name == "vapoursynth"]

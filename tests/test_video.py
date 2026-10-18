@@ -5,13 +5,17 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests for the video module."""
 
+from collections.abc import Generator
 from concurrent.futures import Future
 
 import pytest
-from vapoursynth import GRAY8, RGB24, Error, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
+from vapoursynth import GRAY8, GRAYS, RGB24, Error, PresetVideoFormat, VideoFormat, VideoFrame, VideoNode, core
 
 from tests._testutils import use_standalone_policy
+from vsengine import set_loop
 from vsengine._nodes import buffer_futures, close_when_needed
+from vsengine.adapters.asyncio import AsyncIOLoop
+from vsengine.loops import NO_LOOP
 from vsengine.video import frame, frames, planes, render
 
 AnyFormat = PresetVideoFormat | VideoFormat
@@ -21,6 +25,15 @@ AnyFormat = PresetVideoFormat | VideoFormat
 def standalone_policy() -> None:
     """Set up a standalone policy for video tests."""
     use_standalone_policy()
+
+
+@pytest.fixture
+def asyncio_loop() -> Generator[None]:
+    set_loop(AsyncIOLoop())
+    try:
+        yield
+    finally:
+        set_loop(NO_LOOP)
 
 
 def generate_video(length: int = 3, width: int = 1, height: int = 1, format: AnyFormat = GRAY8) -> VideoNode:
@@ -340,3 +353,42 @@ def test_buffer_futures_early_exit() -> None:
     gen.close()
     cancelled_count = sum(1 for f in futs if f.cancelled())
     assert cancelled_count > 0
+
+
+def test_render_y4m_float_raises() -> None:
+    clip = core.std.BlankClip(length=2, width=16, height=16, format=GRAYS)
+    with pytest.raises(ValueError, match="Can only use integer formats for Y4M-Streams"):
+        list(render(clip, y4m=True))
+
+
+def test_render_y4m_variable_resolution_raises() -> None:
+    clip_a = core.std.BlankClip(length=1, width=16, height=16, format=GRAY8)
+    clip_b = core.std.BlankClip(length=1, width=32, height=32, format=GRAY8)
+    var_clip = core.std.Splice([clip_a, clip_b], mismatch=True)
+
+    with pytest.raises(ValueError, match="Cannot render variable format or variable resolution clip to Y4M"):
+        list(render(var_clip, y4m=True))
+
+
+@pytest.mark.asyncio
+async def test_render_as_completed_does_not_release_frames_early(asyncio_loop: None) -> None:
+    clip = generate_video(length=6)
+    results = list[tuple[int, bytes]]()
+
+    results = [fut async for fut in render(clip)]
+
+    assert len(results) == 6
+    assert {idx for idx, _ in results} == {1, 2, 3, 4, 5, 6}
+
+
+def test_close_when_needed_early_break_closes_frame() -> None:
+    clip = generate_video(length=4)
+    it = iter(close_when_needed([frame(clip, n) for n in range(4)]))
+
+    f = next(it)
+    frame_obj = f.result()
+    it.close()
+
+    # Closing iterator should have registered the exit callback and closed the frame
+    with pytest.raises(RuntimeError):
+        _ = frame_obj.props

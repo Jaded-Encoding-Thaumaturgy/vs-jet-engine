@@ -573,3 +573,25 @@ def test_concurrent_script_execution() -> None:
             futs = [ex.submit(run_one, i) for i in range(8)]
             for f in futs:
                 f.result()
+
+
+def test_modified_argv0_empty_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", [])
+    with _ModifiedArgv0("custom_script.py"):
+        assert sys.argv == ["custom_script.py"]
+    assert sys.argv == []
+
+
+@pytest.mark.asyncio
+async def test_script_get_variable_async_chaining(asyncio_loop: None) -> None:
+    with Policy() as p:
+        script = load_code("import time; time.sleep(0.5); result = 99", p, inline=False)
+        script.run()
+        # Retrieve variable while script is still running in background thread
+        fut = script.get_variable("result")
+        assert await fut == 99
+
+
+def test_wrap_all_errors_passthrough() -> None:
+    with pytest.raises(ExecutionError), WrapAllErrors():
+        raise ExecutionError(ValueError("inner"))

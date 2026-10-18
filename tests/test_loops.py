@@ -6,6 +6,7 @@
 """Tests for the event loop API."""
 
 import contextlib
+import contextvars
 import queue
 import threading
 from collections.abc import Callable, Generator
@@ -153,3 +154,14 @@ def test_loop_to_thread_does_not_require_environment() -> None:
 
     fut = to_thread(test)
     fut.result(timeout=0.1)
+
+
+def test_loop_to_thread_copies_context() -> None:
+    var = contextvars.ContextVar[str]("test_loop_context_var", default="default")
+    var.set("custom_val")
+
+    def check_context() -> str:
+        return var.get()
+
+    fut = to_thread(check_context)
+    assert fut.result(timeout=0.1) == "custom_val"

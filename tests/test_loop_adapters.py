@@ -525,3 +525,27 @@ def test_asyncio_detach_lifecycle_external_executor() -> None:
 
         fut = custom_executor.submit(lambda: 42)
         assert fut.result(timeout=1.0) == 42
+
+
+@pytest.mark.trio
+async def test_trio_wrap_cancelled_raises_proper_exception() -> None:
+    async with trio.open_nursery() as nursery:
+        loop = TrioEventLoop(nursery)
+        with pytest.raises(trio.Cancelled), loop.wrap_cancelled():
+            raise Cancelled("explicit")
+
+
+@pytest.mark.trio
+async def test_trio_await_future_task_cancellation_cancels_future() -> None:
+    fut = Future[int]()
+
+    with trio.move_on_after(0.05):
+        async with trio.open_nursery() as nursery:
+            loop = TrioEventLoop(nursery)
+
+            with trio.fail_after(0.05):
+                await loop.await_future(fut)
+
+            nursery.cancel_scope.cancel()
+
+    assert fut.cancelled()

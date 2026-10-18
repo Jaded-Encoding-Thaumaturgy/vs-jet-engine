@@ -1257,3 +1257,24 @@ async def test_unified_iterator_as_completed_method(asyncio_loop: None) -> None:
         results.append(fut.result())
 
     assert sorted(results) == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_as_completed_early_break_cancels_active_and_closes_iterator(asyncio_loop: None) -> None:
+    futs = [Future[int]() for _ in range(5)]
+
+    futs[0].set_result(42)
+    ag = as_completed(futs, concurrency=3)
+
+    async for fut in ag:
+        assert fut.result() == 42
+        break
+
+    await ag.aclose()
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(ag)
+
+    # In-flight uncompleted futures should have been cancelled
+    assert futs[1].cancelled() is True
+    assert futs[2].cancelled() is True
