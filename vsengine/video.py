@@ -125,6 +125,12 @@ def render(
     frame_count = len(node)
 
     if y4m:
+        if not all([node.format.id, node.width, node.height]):
+            raise ValueError("Cannot render variable format or variable resolution clip to Y4M")
+
+        if node.format.sample_type != vs.INTEGER:
+            raise ValueError("Can only use integer formats for Y4M-Streams")
+
         match node.format.color_family:
             case vs.GRAY:
                 y4mformat = "mono"
