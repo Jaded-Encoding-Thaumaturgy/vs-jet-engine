@@ -176,9 +176,6 @@ class _ManagedPolicy(EnvironmentPolicy):
         if stack and self.is_alive(stack[-1]):
             return stack[-1]
 
-        if (env := getattr(self._local, "environment", None)) is not None and self.is_alive(env):
-            return env
-
         # We wrap everything in a mutex to make sure
         # no context-switch can reliably happen in this section.
         with self._mutex:
