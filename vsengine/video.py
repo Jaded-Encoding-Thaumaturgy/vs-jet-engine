@@ -170,17 +170,18 @@ def render(
 
     def _make_frame_renderer(idx: int) -> Callable[[vs.VideoFrame], tuple[int, bytes]]:
         def render_single_frame(f: vs.VideoFrame) -> tuple[int, bytes]:
-            buf = list[bytes]()
+            with f:
+                buf = list[bytes]()
 
-            if y4m:
-                buf.append(b"FRAME\n")
+                if y4m:
+                    buf.append(b"FRAME\n")
 
-            for plane in iter(f):
-                buf.append(plane.tobytes())
+                for plane in iter(f):
+                    buf.append(plane.tobytes())
 
-            return idx, b"".join(buf)
+                return idx, b"".join(buf)
 
         return render_single_frame
 
-    for frame_idx, fut in enumerate(frames(node, env, prefetch=prefetch, backlog=backlog).futures, 1):
+    for frame_idx, fut in enumerate(frames(node, env, prefetch=prefetch, backlog=backlog, close=False).futures, 1):
         yield UnifiedFuture.from_future(fut).map(_make_frame_renderer(frame_idx))
