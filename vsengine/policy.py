@@ -18,7 +18,7 @@ from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Self, override
+from typing import Self, override
 from weakref import ReferenceType, ref
 
 from vapoursynth import (
@@ -422,7 +422,7 @@ class Policy(AbstractContextManager["Policy"]):
     def new_environment(
         self,
         flags_creation: int | None = None,
-        logger: bool | Callable[[int, str], None] = False,
+        logger: bool | Callable[[int, str], None] | None = None,
     ) -> ManagedEnvironment:
         """
         Creates a new VapourSynth core.
@@ -437,7 +437,8 @@ class Policy(AbstractContextManager["Policy"]):
             flags_creation: The flags to use when creating the environment.
                             See vapoursynth.CoreCreationFlags for more information.
                             Defaults to the flags used when creating this policy.
-            logger: Set a logger for this environments. Default to the logger passed when creating this policy.
+            logger: Set a logger for this environment. None defaults to the logger passed when creating this policy.
+                    Pass False to disable logging for this environment.
         Returns:
             A new ManagedEnvironment.
         """
@@ -449,9 +450,9 @@ class Policy(AbstractContextManager["Policy"]):
             if logger is True
             else logger
             if callable(logger)
-            else self._logger
-            if self._logger is not None
             else None
+            if logger is False
+            else self._logger
         )
 
         if vslogger is not None:
