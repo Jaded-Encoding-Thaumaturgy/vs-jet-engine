@@ -10,7 +10,7 @@ import contextvars
 import inspect
 import threading
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Coroutine, Generator
 from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager
 from functools import wraps
@@ -200,10 +200,12 @@ def set_loop(loop: EventLoop) -> None:
 
 
 @overload
-def keep_environment[**P, R](func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]: ...
-@overload
 def keep_environment[**P, R](func: Callable[P, R]) -> Callable[P, R]: ...
-def keep_environment[**P, R](func: Callable[..., Any]) -> Callable[..., Any]:
+@overload
+def keep_environment[**P, R](func: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, Coroutine[Any, Any, R]]: ...
+def keep_environment[**P, R](
+    func: Callable[P, R] | Callable[P, Coroutine[Any, Any, R]],
+) -> Callable[P, R] | Callable[P, Coroutine[Any, Any, R]]:
     """
     Decorate a function to preserve the VapourSynth environment.
 
@@ -219,17 +221,21 @@ def keep_environment[**P, R](func: Callable[..., Any]) -> Callable[..., Any]:
     except RuntimeError:
         environment = _noop
 
-    @wraps(func)
-    async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
-        with environment():
-            return await func(*args, **kwargs)
+    if inspect.iscoroutinefunction(func):
+
+        @wraps(func)
+        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            with environment():
+                return await func(*args, **kwargs)
+
+        return async_wrapper
 
     @wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
         with environment():
             return func(*args, **kwargs)
 
-    return async_wrapper if inspect.iscoroutinefunction(func) else wrapper
+    return wrapper
 
 
 def from_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
