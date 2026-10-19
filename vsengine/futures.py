@@ -690,13 +690,13 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
             if yield_cycles:
                 await loop.await_future(loop.next_cycle())
 
-    def as_completed(self, *, concurrency: int | None = None) -> AsyncIterator[UnifiedFuture[T]]:
+    def as_completed(self, *, concurrency: int | None = None) -> AsyncGenerator[UnifiedFuture[T]]:
         """
         Yield futures as they complete, maintaining at most `concurrency` in-flight requests.
 
         :param concurrency: Maximum number of in-flight futures.
             Defaults to `multiprocessing.cpu_count()` (minimum 1) if None.
-        :return: An async iterator yielding futures in order of completion.
+        :return: An async generator yielding futures in order of completion.
         """
         return as_completed(self.futures, concurrency=concurrency)
 
@@ -732,7 +732,7 @@ async def as_completed[S](
     :param iterable: Iterable yielding futures to process.
     :param concurrency: Maximum number of in-flight futures. Defaults to
         `multiprocessing.cpu_count()` (minimum 1) if None.
-    :return: An async iterator yielding futures in order of completion.
+    :return: An async generator yielding futures in order of completion.
     """
     if concurrency is None:
         try:
