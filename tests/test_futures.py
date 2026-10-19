@@ -9,7 +9,7 @@ import asyncio
 import contextlib
 import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
-from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, InvalidStateError, ThreadPoolExecutor
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, Self, override
 
@@ -95,10 +95,11 @@ def ensure_no_loop() -> Generator[None]:
 
 
 @pytest_asyncio.fixture
-async def asyncio_loop() -> AsyncGenerator[None]:
-    set_loop(AsyncIOLoop())
+async def asyncio_loop() -> AsyncGenerator[AsyncIOLoop]:
+    loop = AsyncIOLoop()
+    set_loop(loop)
     try:
-        yield
+        yield loop
     finally:
         set_loop(NO_LOOP)
 
@@ -107,18 +108,18 @@ async def asyncio_loop() -> AsyncGenerator[None]:
 
 
 @pytest.mark.asyncio
-async def test_unified_future_is_await(asyncio_loop: None) -> None:
+async def test_unified_future_is_await(asyncio_loop: AsyncIOLoop) -> None:
     await UnifiedFuture.from_call(succeeds)
 
 
 @pytest.mark.asyncio
-async def test_unified_future_async_context_manager_async(asyncio_loop: None) -> None:
+async def test_unified_future_async_context_manager_async(asyncio_loop: AsyncIOLoop) -> None:
     async with UnifiedFuture.from_call(asynccontextmanager_helper) as v:
         assert v == 2
 
 
 @pytest.mark.asyncio
-async def test_unified_future_context_manager_async(asyncio_loop: None) -> None:
+async def test_unified_future_context_manager_async(asyncio_loop: AsyncIOLoop) -> None:
     async with UnifiedFuture.from_call(contextmanager_helper) as v:
         assert v == 1
 
@@ -129,14 +130,14 @@ def test_unified_future_context_manager() -> None:
 
 
 def test_unified_future_map() -> None:
-    def _crash(v: Any) -> str:
+    def crash(v: Any) -> str:
         raise RuntimeError(str(v))
 
     future0 = UnifiedFuture.from_call(succeeds)
     new_future0 = future0.map(lambda v: str(v))
     assert new_future0.result() == "1"
 
-    new_future0 = future0.map(_crash)
+    new_future0 = future0.map(crash)
     assert isinstance(new_future0.exception(), RuntimeError)
 
     future1 = UnifiedFuture.from_call(fails)
@@ -145,14 +146,14 @@ def test_unified_future_map() -> None:
 
 
 def test_unified_future_catch() -> None:
-    def _crash(_: BaseException) -> str:
+    def crash(_: BaseException) -> str:
         raise RuntimeError("test")
 
     future0 = UnifiedFuture.from_call(fails)
     new_future0 = future0.catch(lambda e: e.__class__.__name__)
     assert new_future0.result() == "RuntimeError"
 
-    new_future0 = future0.catch(_crash)
+    new_future0 = future0.catch(crash)
     assert isinstance(new_future0.exception(), RuntimeError)
 
     future1 = UnifiedFuture.from_call(succeeds)
@@ -163,25 +164,25 @@ def test_unified_future_catch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_future_add_loop_callback(asyncio_loop: None) -> None:
-    def _init_thread(fut: Future[threading.Thread]) -> None:
+async def test_unified_future_add_loop_callback(asyncio_loop: AsyncIOLoop) -> None:
+    def init_thread(fut: Future[threading.Thread]) -> None:
         fut.set_result(threading.current_thread())
 
     fut: Future[threading.Thread] = Future()
-    thr = threading.Thread(target=lambda: _init_thread(fut))
+    thr = threading.Thread(target=lambda: init_thread(fut))
 
-    def _wrapper() -> Future[threading.Thread]:
+    def wrapper() -> Future[threading.Thread]:
         return fut
 
-    unified_fut = UnifiedFuture.from_call(_wrapper)
+    unified_fut = UnifiedFuture.from_call(wrapper)
 
     loop_thread: threading.Thread | None = None
 
-    def _record_loop_thr(_: Any) -> None:
+    def record_loop_thr(_: Any) -> None:
         nonlocal loop_thread
         loop_thread = threading.current_thread()
 
-    unified_fut.add_loop_callback(_record_loop_thr)
+    unified_fut.add_loop_callback(record_loop_thr)
     thr.start()
     cb_thread = await unified_fut
 
@@ -189,17 +190,17 @@ async def test_unified_future_add_loop_callback(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_future_add_loop_callback_chaining(asyncio_loop: None) -> None:
+async def test_unified_future_add_loop_callback_chaining(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[int]()
     unified_fut = UnifiedFuture.from_future(fut)
 
     recorded_value: int | None = None
 
-    def _side_effect(f: Future[int]) -> None:
+    def side_effect(f: Future[int]) -> None:
         nonlocal recorded_value
         recorded_value = f.result() * 2
 
-    chained_fut = unified_fut.add_loop_callback(_side_effect)
+    chained_fut = unified_fut.add_loop_callback(side_effect)
 
     results = list[int]()
     chained_fut.then(lambda val: results.append(val))
@@ -213,24 +214,24 @@ async def test_unified_future_add_loop_callback_chaining(asyncio_loop: None) -> 
 
 
 @pytest.mark.asyncio
-async def test_unified_future_then_on_loop(asyncio_loop: None) -> None:
+async def test_unified_future_then_on_loop(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[int]()
     unified_fut = UnifiedFuture.from_future(fut)
 
     loop_thread: threading.Thread | None = None
     callback_thread: threading.Thread | None = None
 
-    def _init_thread() -> None:
+    def init_thread() -> None:
         fut.set_result(42)
 
-    def _on_success(v: int) -> int:
+    def on_success(v: int) -> int:
         nonlocal callback_thread
         callback_thread = threading.current_thread()
         return v * 2
 
-    chained = unified_fut.then(_on_success, on_loop=True)
+    chained = unified_fut.then(on_success, on_loop=True)
 
-    thr = threading.Thread(target=_init_thread)
+    thr = threading.Thread(target=init_thread)
     thr.start()
 
     res = await chained
@@ -241,24 +242,24 @@ async def test_unified_future_then_on_loop(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_future_map_on_loop(asyncio_loop: None) -> None:
+async def test_unified_future_map_on_loop(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[int]()
     unified_fut = UnifiedFuture.from_future(fut)
 
     loop_thread: threading.Thread | None = None
     callback_thread: threading.Thread | None = None
 
-    def _init_thread() -> None:
+    def init_thread() -> None:
         fut.set_result(10)
 
-    def _map_fn(v: int) -> str:
+    def map_fn(v: int) -> str:
         nonlocal callback_thread
         callback_thread = threading.current_thread()
         return f"value: {v}"
 
-    chained = unified_fut.map(_map_fn, on_loop=True)
+    chained = unified_fut.map(map_fn, on_loop=True)
 
-    thr = threading.Thread(target=_init_thread)
+    thr = threading.Thread(target=init_thread)
     thr.start()
 
     res = await chained
@@ -269,24 +270,24 @@ async def test_unified_future_map_on_loop(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_future_catch_on_loop(asyncio_loop: None) -> None:
+async def test_unified_future_catch_on_loop(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[int]()
     unified_fut = UnifiedFuture.from_future(fut)
 
     loop_thread: threading.Thread | None = None
     callback_thread: threading.Thread | None = None
 
-    def _init_thread() -> None:
+    def init_thread() -> None:
         fut.set_exception(ValueError("error!"))
 
-    def _catch_fn(e: BaseException) -> str:
+    def catch_fn(e: BaseException) -> str:
         nonlocal callback_thread
         callback_thread = threading.current_thread()
         return str(e)
 
-    chained = unified_fut.catch(_catch_fn, on_loop=True)
+    chained = unified_fut.catch(catch_fn, on_loop=True)
 
-    thr = threading.Thread(target=_init_thread)
+    thr = threading.Thread(target=init_thread)
     thr.start()
 
     res = await chained
@@ -302,12 +303,12 @@ async def test_unified_future_catch_on_loop(asyncio_loop: None) -> None:
 def test_unified_iterator_consume_succeeds() -> None:
     set_loop(NO_LOOP)
     my_futures: list[Future[int]] = [Future(), Future()]
-    results: list[int] = []
+    results = list[int]()
 
-    def _add_to_result(f: Future[int]) -> None:
+    def add_to_result(f: Future[int]) -> None:
         results.append(f.result())
 
-    state = UnifiedIterator(iter(my_futures)).consume(_add_to_result)
+    state = UnifiedIterator(iter(my_futures)).consume(add_to_result)
     assert not state.done()
     my_futures[1].set_result(2)
     assert not state.done()
@@ -320,17 +321,17 @@ def test_unified_iterator_consume_succeeds() -> None:
 def test_unified_iterator_consume_forwards_errors() -> None:
     set_loop(NO_LOOP)
     my_futures: list[Future[int]] = [Future(), Future()]
-    results: list[int] = []
+    results = list[int]()
     errors: list[BaseException] = []
 
-    def _add_to_result(f: Future[int]) -> None:
+    def add_to_result(f: Future[int]) -> None:
         if exc := f.exception():
             errors.append(exc)
         else:
             results.append(f.result())
 
     iterator = iter(my_futures)
-    state = UnifiedIterator(iterator).consume(_add_to_result)
+    state = UnifiedIterator(iterator).consume(add_to_result)
     assert not state.done()
     my_futures[0].set_exception(RuntimeError())
     assert not state.done()
@@ -345,31 +346,41 @@ def test_unified_iterator_consume_forwards_errors() -> None:
 def test_unified_iterator_consume_cancels() -> None:
     set_loop(NO_LOOP)
     my_futures: list[Future[int]] = [Future(), Future()]
-    results: list[int] = []
+    results = list[int]()
 
-    def _add_to_result(f: Future[int]) -> bool:
+    def add_to_result(f: Future[int]) -> bool:
         results.append(f.result())
         return False
 
     iterator = iter(my_futures)
-    state = UnifiedIterator(iterator).consume(_add_to_result)
+    state = UnifiedIterator(iterator).consume(add_to_result)
     assert not state.done()
     my_futures[0].set_result(1)
     assert state.done()
     assert state.result() is None
     assert results == [1]
 
+    # Test cancelling the returned state future directly
+    futs = [Future[int](), Future[int]()]
+    cancelled_results = list[int]()
+    state2 = UnifiedIterator(futs).consume(lambda f: cancelled_results.append(f.result()))
+    state2.cancel()
+    futs[0].set_result(1)
+    futs[1].set_result(2)
+    assert state2.cancelled()
+    assert cancelled_results == []
 
-def test_unified_iterator_consume_cancels_on_crash() -> None:
+
+def test_unified_iterator_consume_cancels_oncrash() -> None:
     set_loop(NO_LOOP)
     my_futures: list[Future[int]] = [Future(), Future()]
     err = RuntimeError("test")
 
-    def _crash(_: Future[int]) -> None:
+    def crash(_: Future[int]) -> None:
         raise err
 
     iterator = iter(my_futures)
-    state = UnifiedIterator(iterator).consume(_crash)
+    state = UnifiedIterator(iterator).consume(crash)
     assert not state.done()
     my_futures[0].set_result(1)
     assert state.done()
@@ -382,15 +393,15 @@ def test_unified_iterator_consume_requests_as_needed() -> None:
     requested: list[Future[int]] = []
     continued: list[Future[int]] = []
 
-    def _add_to_result(f: Future[int]) -> None: ...
+    def add_to_result(f: Future[int]) -> None: ...
 
-    def _it() -> Iterator[Future[int]]:
+    def it() -> Iterator[Future[int]]:
         for fut in my_futures:
             requested.append(fut)
             yield fut
             continued.append(fut)
 
-    state = UnifiedIterator(_it()).consume(_add_to_result)
+    state = UnifiedIterator(it()).consume(add_to_result)
     assert not state.done()
     assert requested == [my_futures[0]]
     assert continued == []
@@ -406,7 +417,7 @@ def test_unified_iterator_consume_requests_as_needed() -> None:
     assert continued == [my_futures[0], my_futures[1]]
 
 
-def test_unified_iterator_consume_cancels_on_iterator_crash() -> None:
+def test_unified_iterator_consume_cancels_on_iteratorcrash() -> None:
     err = RuntimeError("test")
 
     class It:
@@ -436,7 +447,7 @@ def test_unified_iterator_can_iter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_iterator_can_aiter(asyncio_loop: None) -> None:
+async def test_unified_iterator_can_aiter(asyncio_loop: AsyncIOLoop) -> None:
     n = 0
     async for n2 in UnifiedIterator.from_call(future_iterator):
         assert n == n2
@@ -513,7 +524,7 @@ def test_reject_directly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_loop_callback_failed_future(asyncio_loop: None) -> None:
+async def test_add_loop_callback_failed_future(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[None]()
     unified_fut = UnifiedFuture.from_future(fut)
 
@@ -527,14 +538,14 @@ async def test_add_loop_callback_failed_future(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_loop_callback_callback_exception(asyncio_loop: None) -> None:
+async def test_add_loop_callback_callback_exception(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[int]()
     unified_fut = UnifiedFuture.from_future(fut)
 
-    def _callback_fail(_: Future[int]) -> None:
+    def callback_fail(_: Future[int]) -> None:
         raise ValueError("callback error")
 
-    chained = unified_fut.add_loop_callback(_callback_fail)
+    chained = unified_fut.add_loop_callback(callback_fail)
     fut.set_result(42)
 
     with pytest.raises(ValueError, match="callback error"):
@@ -542,14 +553,14 @@ async def test_add_loop_callback_callback_exception(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_then_on_loop_callback_exception(asyncio_loop: None) -> None:
+async def test_then_on_loop_callback_exception(asyncio_loop: AsyncIOLoop) -> None:
     fut = Future[int]()
     unified_fut = UnifiedFuture.from_future(fut)
 
-    def _callback_fail(_: int) -> int:
+    def callback_fail(_: int) -> int:
         raise ValueError("then callback error")
 
-    chained = unified_fut.then(_callback_fail, on_loop=True)
+    chained = unified_fut.then(callback_fail, on_loop=True)
     fut.set_result(42)
 
     with pytest.raises(ValueError, match="then callback error"):
@@ -566,7 +577,7 @@ def test_context_manager_not_implemented() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_context_manager_not_implemented(asyncio_loop: None) -> None:
+async def test_async_context_manager_not_implemented(asyncio_loop: AsyncIOLoop) -> None:
     fut = UnifiedFuture.resolve(FakeContextManager())
     with pytest.raises(NotImplementedError):
         async with fut:
@@ -610,7 +621,7 @@ def test_consume_sync_cancel() -> None:
 
 
 @pytest.mark.asyncio
-async def test_consume_async_loop(asyncio_loop: None) -> None:
+async def test_consume_async_loop(asyncio_loop: AsyncIOLoop) -> None:
     my_futures = [Future[int](), Future[int]()]
     results = list[int]()
 
@@ -803,7 +814,7 @@ def test_unified_future_cancellation_propagates_to_closed_asyncio_future() -> No
 
 
 @pytest.mark.asyncio
-async def test_unified_future_cancellation_prevents_asyncio_task_from_running(asyncio_loop: None) -> None:
+async def test_unified_future_cancellation_prevents_asyncio_task_from_running(asyncio_loop: AsyncIOLoop) -> None:
     ran: bool = False
 
     async def source() -> int:
@@ -822,7 +833,7 @@ async def test_unified_future_cancellation_prevents_asyncio_task_from_running(as
 
 
 @pytest.mark.asyncio
-async def test_unified_future_from_asyncio_future_exception(asyncio_loop: None) -> None:
+async def test_unified_future_from_asyncio_future_exception(asyncio_loop: AsyncIOLoop) -> None:
     raw = asyncio.get_running_loop().create_future()
     uni = UnifiedFuture.from_future(raw)
     raw.set_exception(ZeroDivisionError("division by zero"))
@@ -1030,7 +1041,7 @@ def test_unified_future_from_trio_task_run_finished_suppressed(mocker: pytest_mo
 
 
 @pytest.mark.asyncio
-async def test_unified_future_add_loop_callback_cancellation_propagation(asyncio_loop: None) -> None:
+async def test_unified_future_add_loop_callback_cancellation_propagation(asyncio_loop: AsyncIOLoop) -> None:
     raw = UnifiedFuture[int]()
     chained = raw.add_loop_callback(lambda f: None)
 
@@ -1040,7 +1051,7 @@ async def test_unified_future_add_loop_callback_cancellation_propagation(asyncio
 
 
 @pytest.mark.asyncio
-async def test_unified_future_add_loop_callback_custom_on_cancel(asyncio_loop: None) -> None:
+async def test_unified_future_add_loop_callback_custom_on_cancel(asyncio_loop: AsyncIOLoop) -> None:
     cancelled_calls = list[threading.Thread]()
     loop_thread = threading.current_thread()
     raw = UnifiedFuture[int]()
@@ -1057,7 +1068,7 @@ async def test_unified_future_add_loop_callback_custom_on_cancel(asyncio_loop: N
 
 
 @pytest.mark.asyncio
-async def test_unified_future_then_custom_on_cancel_on_loop(asyncio_loop: None) -> None:
+async def test_unified_future_then_custom_on_cancel_on_loop(asyncio_loop: AsyncIOLoop) -> None:
     cancelled_calls = list[threading.Thread]()
     loop_thread = threading.current_thread()
     raw = UnifiedFuture[int]()
@@ -1077,9 +1088,14 @@ async def test_unified_future_then_custom_on_cancel_on_loop(asyncio_loop: None) 
     assert cancelled_calls == [loop_thread]
     assert raw.cancelled() is False
 
+    # Resolving parent after child was cancelled should safely suppress callback
+    raw.set_result(10)
+    await asyncio.sleep(0.01)
+    assert chained.cancelled() is True
+
 
 @pytest.mark.asyncio
-async def test_unified_future_add_loop_callback_parent_cancelled(asyncio_loop: None) -> None:
+async def test_unified_future_add_loop_callback_parent_cancelled(asyncio_loop: AsyncIOLoop) -> None:
     raw = UnifiedFuture[int]()
     called = list[bool]()
 
@@ -1122,7 +1138,7 @@ def test_concurrent_cancellation_and_resolution() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("yield_cycles", [False, True], ids=["no_yield", "yield"])
-async def test_for_each_consumption(asyncio_loop: None, is_async: bool, yield_cycles: bool) -> None:
+async def test_for_each_consumption(asyncio_loop: AsyncIOLoop, is_async: bool, yield_cycles: bool) -> None:
     pending = Future[int]()
     futs = [resolve(1), pending, resolve(3)]
 
@@ -1150,7 +1166,7 @@ async def test_for_each_consumption(asyncio_loop: None, is_async: bool, yield_cy
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
-async def test_for_each_early_stop(asyncio_loop: None, is_async: bool) -> None:
+async def test_for_each_early_stop(asyncio_loop: AsyncIOLoop, is_async: bool) -> None:
     futs = [resolve(1), resolve(2), resolve(3)]
     results = list[int]()
 
@@ -1170,7 +1186,7 @@ async def test_for_each_early_stop(asyncio_loop: None, is_async: bool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_for_each_forwards_errors(asyncio_loop: None) -> None:
+async def test_for_each_forwards_errors(asyncio_loop: AsyncIOLoop) -> None:
     f1 = Future[int]()
     f2 = resolve(2)
 
@@ -1192,7 +1208,7 @@ async def test_for_each_forwards_errors(asyncio_loop: None) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
-async def test_for_each_callback_exception(asyncio_loop: None, is_async: bool) -> None:
+async def test_for_each_callback_exception(asyncio_loop: AsyncIOLoop, is_async: bool) -> None:
     futs = [resolve(1), resolve(2)]
 
     if is_async:
@@ -1210,7 +1226,7 @@ async def test_for_each_callback_exception(asyncio_loop: None, is_async: bool) -
 
 
 @pytest.mark.asyncio
-async def test_as_completed_out_of_order(asyncio_loop: None) -> None:
+async def test_as_completed_out_of_order(asyncio_loop: AsyncIOLoop) -> None:
     f0 = Future[int]()
     f1 = Future[int]()
     f2 = Future[int]()
@@ -1236,7 +1252,7 @@ async def test_as_completed_out_of_order(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_as_completed_concurrency_bound(asyncio_loop: None) -> None:
+async def test_as_completed_concurrency_bound(asyncio_loop: AsyncIOLoop) -> None:
     futs = [Future[int]() for _ in range(5)]
     requested = list[int]()
 
@@ -1277,7 +1293,7 @@ async def test_as_completed_concurrency_bound(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_as_completed_invalid_concurrency(asyncio_loop: None) -> None:
+async def test_as_completed_invalid_concurrency(asyncio_loop: AsyncIOLoop) -> None:
     with pytest.raises(ValueError, match="concurrency must be greater than 0"):
         async for _ in as_completed([], concurrency=0):
             pass
@@ -1288,7 +1304,7 @@ async def test_as_completed_invalid_concurrency(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_as_completed_empty(asyncio_loop: None) -> None:
+async def test_as_completed_empty(asyncio_loop: AsyncIOLoop) -> None:
     items = list[Future[int]]()
     async for fut in as_completed(items):
         items.append(fut)
@@ -1296,7 +1312,7 @@ async def test_as_completed_empty(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unified_iterator_as_completed_method(asyncio_loop: None) -> None:
+async def test_unified_iterator_as_completed_method(asyncio_loop: AsyncIOLoop) -> None:
     f1 = resolve(1)
     f2 = resolve(2)
     it = UnifiedIterator(iter([f1, f2]))
@@ -1309,7 +1325,7 @@ async def test_unified_iterator_as_completed_method(asyncio_loop: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_as_completed_early_break_cancels_active_and_closes_iterator(asyncio_loop: None) -> None:
+async def test_as_completed_early_break_cancels_active_and_closes_iterator(asyncio_loop: AsyncIOLoop) -> None:
     futs = [Future[int]() for _ in range(5)]
 
     futs[0].set_result(42)
@@ -1327,3 +1343,55 @@ async def test_as_completed_early_break_cancels_active_and_closes_iterator(async
     # In-flight uncompleted futures should have been cancelled
     assert futs[1].cancelled() is True
     assert futs[2].cancelled() is True
+
+
+def test_unified_future_try_set_state_transitions() -> None:
+    """Ensure try_set_result and try_set_exception return False when future is already done."""
+    fut = UnifiedFuture[int]()
+    assert fut.try_set_result(42) is True
+    assert fut.try_set_result(99) is False
+    assert fut.try_set_exception(ValueError("error")) is False
+
+
+@pytest.mark.asyncio
+async def test_then_on_loop_cancellation_propagation(
+    asyncio_loop: AsyncIOLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ensure cancellation propagates properly when chaining callbacks on the event loop."""
+    # Target cancelled while callback is queued/running on loop
+    parent1 = UnifiedFuture[int]()
+    blocked = threading.Event()
+
+    def cb(x: int) -> int:
+        blocked.wait(timeout=1.0)
+        return x * 2
+
+    child1 = parent1.then(cb, cancel_cb=lambda: None, on_loop=True)
+    parent1.set_result(10)
+    child1.cancel()
+    blocked.set()
+
+    await asyncio.sleep(0.01)
+    assert child1.cancelled()
+
+    # Event loop task cancelled propagates cancellation to target
+    cancelled_lf = Future[int]()
+    cancelled_lf.cancel()
+    monkeypatch.setattr(asyncio_loop, "from_thread", lambda *args, **kwargs: cancelled_lf)
+
+    parent2 = UnifiedFuture[int]()
+    child2 = parent2.then(lambda x: x * 2, on_loop=True)
+    parent2.set_result(20)
+
+    await asyncio.sleep(0.01)
+    assert child2.cancelled()
+
+
+def test_from_future_cancellation_race_handling(mocker: pytest_mock.MockerFixture) -> None:
+    """Ensure from_future handles CancelledError raised by exception() call."""
+    raw = Future[int]()
+    mocker.patch.object(raw, "cancelled", return_value=False)
+    mocker.patch.object(raw, "exception", side_effect=CancelledError())
+    uf = UnifiedFuture.from_future(raw)
+    raw.set_result(100)
+    assert uf.cancelled()

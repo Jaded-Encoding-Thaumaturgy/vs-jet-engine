@@ -12,6 +12,7 @@ import contextlib
 import contextvars
 import functools
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
@@ -28,26 +29,26 @@ from vsengine.adapters.trio import TrioEventLoop
 from vsengine.loops import NO_LOOP, Cancelled, EventLoop, _NoEventLoop, set_loop
 
 
-def make_async[T: AdapterTest, **P](func: Callable[Concatenate[T, P], Any]) -> Callable[Concatenate[T, P], None]:
+def within_loop[T: AdapterTest, **P](func: Callable[Concatenate[T, P], Any]) -> Callable[Concatenate[T, P], None]:
     """Decorator to run a generator-based test within a loop."""
 
     @wraps(func)
-    def _wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> None:
+    def wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> None:
         self.run_within_loop(func, *args, **kwargs)
 
-    return _wrapped
+    return wrapped
 
 
-def is_async[T: AsyncAdapterTest, **P](
+def within_loop_async[T: AsyncAdapterTest, **P](
     func: Callable[Concatenate[T, P], Awaitable[Any]],
 ) -> Callable[Concatenate[T, P], None]:
     """Decorator to run an async test within a loop."""
 
     @wraps(func)
-    def _wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> None:
+    def wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> None:
         self.run_within_loop_async(func, *args, **kwargs)
 
-    return _wrapped
+    return wrapped
 
 
 class AdapterTest(ABC):
@@ -80,23 +81,23 @@ class AdapterTest(ABC):
         finally:
             set_loop(NO_LOOP)
 
-    @make_async
+    @within_loop
     def test_wrap_cancelled_without_cancellation(self) -> None:
         with self.with_loop() as loop, loop.wrap_cancelled():
             ...
 
-    @make_async
+    @within_loop
     def test_wrap_cancelled_with_cancellation(self) -> Generator[None]:
         with self.with_loop() as loop, self.assert_cancelled(), loop.wrap_cancelled():
             raise Cancelled
 
-    @make_async
+    @within_loop
     def test_wrap_cancelled_with_other_exception(self) -> Generator[None]:
         with self.with_loop() as loop, pytest.raises(RuntimeError), loop.wrap_cancelled():
             raise RuntimeError
         yield
 
-    @make_async
+    @within_loop
     def test_next_cycle_doesnt_throw_when_not_cancelled(self) -> Generator[None]:
         with self.with_loop() as loop:
             fut = loop.next_cycle()
@@ -104,7 +105,7 @@ class AdapterTest(ABC):
             assert fut.done()
             assert fut.result() is None
 
-    @make_async
+    @within_loop
     def test_from_thread_with_success(self) -> Generator[None]:
         def test_func() -> AdapterTest:
             return self
@@ -114,7 +115,7 @@ class AdapterTest(ABC):
             yield
             assert fut.result(timeout=0.5) is self
 
-    @make_async
+    @within_loop
     def test_from_thread_with_failure(self) -> Generator[None]:
         def test_func() -> None:
             raise RuntimeError
@@ -125,7 +126,7 @@ class AdapterTest(ABC):
             with pytest.raises(RuntimeError):
                 fut.result(timeout=0.5)
 
-    @make_async
+    @within_loop
     def test_from_thread_forwards_correctly(self) -> Generator[None]:
         def test_func(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
             return args, kwargs
@@ -137,7 +138,7 @@ class AdapterTest(ABC):
             assert args == (1, 2, 3)
             assert kwargs == {"a": "b", "c": "d"}
 
-    @make_async
+    @within_loop
     def test_to_thread_spawns_a_new_thread(self) -> Generator[None]:
         def test_func() -> threading.Thread:
             return threading.current_thread()
@@ -146,7 +147,7 @@ class AdapterTest(ABC):
             t2 = yield from self.resolve_to_thread_future(loop.to_thread(test_func))
             assert threading.current_thread() != t2
 
-    @make_async
+    @within_loop
     def test_to_thread_runs_inline_with_failure(self) -> Generator[None]:
         def test_func() -> None:
             raise RuntimeError
@@ -154,7 +155,7 @@ class AdapterTest(ABC):
         with self.with_loop() as loop, pytest.raises(RuntimeError):
             yield from self.resolve_to_thread_future(loop.to_thread(test_func))
 
-    @make_async
+    @within_loop
     def test_to_thread_forwards_correctly(self) -> Generator[None]:
         def test_func(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
             return args, kwargs
@@ -203,30 +204,40 @@ class AsyncAdapterTest(AdapterTest):
             yield
         return fut.result()
 
-    @is_async
+    @within_loop_async
     async def test_await_future_success(self) -> None:
         with self.with_loop() as loop:
-            fut: Future[int] = Future()
+            fut = Future[int]()
 
-            def _setter() -> None:
+            def setter() -> None:
                 fut.set_result(1)
 
-            threading.Thread(target=_setter).start()
+            threading.Thread(target=setter).start()
             async with self.timeout(0.5):
                 assert await loop.await_future(fut) == 1
 
-    @is_async
+    @within_loop_async
     async def test_await_future_failure(self) -> None:
         with self.with_loop() as loop:
-            fut: Future[int] = Future()
+            # Future fails while pending
+            fut_pending = Future[int]()
 
-            def _setter() -> None:
-                fut.set_exception(RuntimeError())
+            def setter() -> None:
+                time.sleep(0.02)
+                fut_pending.set_exception(RuntimeError("pending failure"))
 
-            threading.Thread(target=_setter).start()
-            with pytest.raises(RuntimeError):
+            threading.Thread(target=setter).start()
+
+            with pytest.raises(RuntimeError, match="pending failure"):
                 async with self.timeout(0.5):
-                    assert await loop.await_future(fut) == 1
+                    assert await loop.await_future(fut_pending) == 1
+
+            # Future was already failed before being awaited
+            fut_done = Future[int]()
+            fut_done.set_exception(RuntimeError("pre-resolved failure"))
+            with pytest.raises(RuntimeError, match="pre-resolved failure"):
+                async with self.timeout(0.5):
+                    assert await loop.await_future(fut_done) == 1
 
 
 class TestNoLoop(AdapterTest):
@@ -335,8 +346,8 @@ def test_asyncio_methods_without_running_loop() -> None:
         loop.next_cycle()
 
 
-def test_trio_methods_without_running_token() -> None:
-    """Ensure TrioEventLoop raises RuntimeError when no Trio token or nursery is active."""
+def test_trio_methods_unusable_states() -> None:
+    """Ensure TrioEventLoop raises RuntimeError when no token/nursery or nursery is cancelled."""
     loop = TrioEventLoop()
     with pytest.raises(RuntimeError, match="No running Trio event loop"):
         loop.from_thread(lambda x: x + 1, 10)
@@ -346,6 +357,19 @@ def test_trio_methods_without_running_token() -> None:
 
     with pytest.raises(RuntimeError, match="No running Trio event loop"):
         loop.next_cycle()
+
+    async def cancelled_main() -> None:
+        async with trio.open_nursery() as nursery:
+            loop_with_nursery = TrioEventLoop(nursery)
+            nursery.cancel_scope.cancel()
+
+            with pytest.raises(RuntimeError, match="Trio nursery has been cancelled"):
+                loop_with_nursery.to_thread(lambda: 42)
+
+            with pytest.raises(RuntimeError, match="Trio nursery is not set or has been cancelled"):
+                loop_with_nursery.next_cycle()
+
+    trio.run(cancelled_main)
 
 
 def test_trio_from_thread_contextvars() -> None:
@@ -516,15 +540,30 @@ async def test_asyncio_to_thread_with_custom_executor() -> None:
         assert context_val == "custom_val"
 
 
-def test_asyncio_detach_lifecycle_external_executor() -> None:
-    """Ensure detach does not shut down an external executor."""
-    with ThreadPoolExecutor(max_workers=1) as custom_executor:
-        adapter = AsyncIOLoop(executor=custom_executor)
+@pytest.mark.parametrize("owned", [False, True], ids=["external_executor", "owned_executor"])
+def test_asyncio_detach_lifecycle(owned: bool) -> None:
+    """Ensure detach cleanly resets loop references and only shuts down owned executors."""
+    if owned:
+        adapter = AsyncIOLoop(max_workers=2)
         adapter.attach()
-        adapter.detach()
+        executor = adapter._executor
+        assert executor is not None
+        assert adapter._owns_executor is True
 
-        fut = custom_executor.submit(lambda: 42)
-        assert fut.result(timeout=1.0) == 42
+        adapter.detach()
+        assert adapter._executor is None
+        assert adapter._loop is None
+        with pytest.raises(RuntimeError, match="cannot schedule new futures after shutdown"):
+            executor.submit(lambda: 42)
+    else:
+        with ThreadPoolExecutor(max_workers=1) as custom_executor:
+            adapter = AsyncIOLoop(executor=custom_executor)
+            adapter.attach()
+            adapter.detach()
+
+            assert adapter._loop is None
+            fut = custom_executor.submit(lambda: 42)
+            assert fut.result(timeout=1.0) == 42
 
 
 @pytest.mark.trio
@@ -549,3 +588,117 @@ async def test_trio_await_future_task_cancellation_cancels_future() -> None:
             nursery.cancel_scope.cancel()
 
     assert fut.cancelled()
+
+
+def test_asyncio_loop_propertysetter() -> None:
+    """Ensure loop setter updates _loop."""
+    adapter = AsyncIOLoop()
+    new_loop = asyncio.new_event_loop()
+    try:
+        adapter.loop = new_loop
+        assert adapter.loop is new_loop
+        adapter.loop = None
+        assert adapter._loop is None
+    finally:
+        new_loop.close()
+
+
+@pytest.mark.asyncio
+async def test_asyncio_next_cycle_cancelled_task() -> None:
+    """Ensure next_cycle sets Cancelled exception if task was cancelled."""
+    adapter = AsyncIOLoop()
+    fut: Future[None] | None = None
+
+    async def task_coro() -> None:
+        nonlocal fut
+        fut = adapter.next_cycle()
+        task.cancel()
+
+    task = asyncio.create_task(task_coro())
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.sleep(0)
+    assert fut is not None
+    assert fut.done()
+    with pytest.raises(Cancelled):
+        fut.result()
+
+
+@pytest.mark.trio
+async def test_trio_await_future_pending_cancellation() -> None:
+    """Ensure awaiting a pending future that gets cancelled raises trio.Cancelled."""
+    async with trio.open_nursery() as nursery:
+        loop = TrioEventLoop(nursery)
+        fut = Future[int]()
+
+        async def cancel_later() -> None:
+            await trio.sleep(0.01)
+            fut.cancel()
+
+        nursery.start_soon(cancel_later)
+        with pytest.raises(trio.Cancelled):
+            await loop.await_future(fut)
+
+
+@pytest.mark.trio
+async def test_trio_to_thread_cancelled_by_nursery() -> None:
+    """Ensure cancelling nursery while to_thread runs sync marks future as Cancelled."""
+    limiter = trio.CapacityLimiter(1)
+    limiter.acquire_nowait()
+    fut: Future[int] | None = None
+
+    with trio.CancelScope() as scope:
+        async with trio.open_nursery() as nursery:
+            loop = TrioEventLoop(nursery, limiter=limiter)
+            fut = loop.to_thread(lambda: 42)
+            await trio.sleep(0.01)
+            scope.cancel()
+
+    assert fut is not None
+    assert fut.done()
+    with pytest.raises(Cancelled):
+        fut.result()
+
+
+def test_trio_methods_after_loop_finished() -> None:
+    """Ensure from_thread and to_thread raise when Trio loop has finished."""
+    loop_refs = list[TrioEventLoop]()
+
+    async def main() -> None:
+        async with trio.open_nursery() as nursery:
+            loop_refs.append(TrioEventLoop(nursery))
+            loop_refs.append(TrioEventLoop(nursery))
+
+    trio.run(main)
+    with pytest.raises(RuntimeError, match="Trio nursery is closed or cannot start tasks"):
+        loop_refs[0].to_thread(lambda: 42)
+
+    with pytest.raises(RuntimeError, match="Trio event loop has already finished or is closed"):
+        loop_refs[1].from_thread(lambda: 42)
+
+
+@pytest.mark.trio
+async def test_trio_token_and_limiter_properties() -> None:
+    """Ensure token and limiter properties lazily fetch and cache correctly."""
+    loop = TrioEventLoop()
+    token = loop.token
+    assert token is not None
+    assert loop.token is token
+
+    limiter = loop.limiter
+    assert limiter is not None
+    assert loop.limiter is limiter
+
+
+@pytest.mark.trio
+async def test_trio_next_cycle_continuation_cancelled() -> None:
+    """Ensure next_cycle sets Cancelled exception if nursery was cancelled before continuation."""
+    async with trio.open_nursery() as nursery:
+        loop = TrioEventLoop(nursery)
+        fut = loop.next_cycle()
+        nursery.cancel_scope.cancel()
+        await trio.sleep(0.01)
+        assert fut.done()
+        with pytest.raises(Cancelled):
+            fut.result()
