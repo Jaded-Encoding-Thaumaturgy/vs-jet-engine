@@ -390,6 +390,10 @@ def load_script(
     :param chdir: Change the currently running directory while the script is running.
                   This is unsafe when running multiple scripts at once.
     :returns: A script object. The script starts running when you call run() on it, or await it.
+              Runtime failures during execution will raise :exc:`ExecutionError`.
+    :raises OSError: If an error occurs reading the script file.
+    :raises SyntaxError: If the script contains invalid Python syntax.
+    :raises ValueError: If the script source contains null bytes.
     """
     rscript = os.path.abspath(os.path.normpath(str(script)))
 
@@ -479,8 +483,12 @@ def load_code(
     :param inline: Run the code inline, e.g. not in a separate thread.
     :param chdir: Change the currently running directory while the script is running.
                   This is unsafe when running multiple scripts at once.
+    :param kwargs: Additional keyword arguments forwarded to :func:`compile`.
     :returns: A script object. The script starts running when you call run() on it, or await it.
-    :kwargs: Arguments to pass to compile().
+              Runtime failures during execution will raise :exc:`ExecutionError`.
+    :raises SyntaxError: If the code contains invalid Python syntax.
+    :raises ValueError: If the source code contains null bytes.
+    :raises TypeError: If an invalid script type is supplied or invalid arguments are passed to :func:`compile`.
     """
     filename = kwargs.pop("filename", None)
     if filename is not None:
