@@ -147,12 +147,17 @@ core = script.environment.core
 
 #### `get_variable(name, default=...)`
 
-Retrieve a variable from the script's module:
+Retrieve a variable from the script's module. If called while the script is running in the background, it returns a future that resolves to the variable once the script completes:
 
 ```python
+# Synchronous
 script.result()
 clip = script.get_variable("my_clip").result()
 fps = script.get_variable("fps", 24).result()
+
+# Asynchronous (chains onto running script execution)
+script.run()
+clip = script.get_variable("my_clip").result()
 ```
 
 ### Cleanup

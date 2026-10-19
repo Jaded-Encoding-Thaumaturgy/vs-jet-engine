@@ -80,11 +80,11 @@ async def process_video(clip):
 
 ## Rendering Byte Streams
 
-### `render(node, env=None, *, prefetch=0, backlog=0, y4m=False)`
+### `render(node, env=None, *, prefetch=None, backlog=0, y4m=False)`
 
 Returns a `UnifiedIterator[tuple[int, bytes]]`. Each video-frame chunk is `(frame_number, data)`, where frame numbers are **1-based**. The raw data is the concatenation of every frame plane.
 
-With `y4m=True`, the iterator first yields `(0, header)` and prefixes each video-frame chunk with `b"FRAME\\n"`.
+With `y4m=True`, the iterator first yields `(0, header)` and prefixes each video-frame chunk with `b"FRAME\\n"`. Y4M requires integer sample types (`vs.INTEGER`) and fixed resolution/format.
 
 ```python
 # Stream raw frame data to a binary file.
@@ -98,14 +98,27 @@ with open("video.y4m", "wb") as output:
         output.write(chunk)
 ```
 
-`render()` uses `frames()` internally and closes source frames as it advances.
+`render()` uses `frames(..., close=False)` internally and closes each frame safely as its bytes are extracted.
 
-## UnifiedIterator Completion Callbacks
+## UnifiedIterator Async Processing
 
-Both `frames()` and `render()` return a `UnifiedIterator`, which can also invoke a callback as each underlying request completes with `run_as_completed(callback)`.
-The callback receives the completed future, not its result.
-Return `None` or a truthy value to continue; return a falsy value to stop early.
-The returned `UnifiedFuture[None]` completes when iteration ends, or propagates an iterator or callback error.
+Both `frames()` and `render()` return a `UnifiedIterator`, which supports several async consumption patterns:
+
+### `as_completed(*, concurrency=None)`
+
+Yields futures in order of completion with a bounded sliding window of size `concurrency` (defaults to CPU count):
+
+```python
+async def render_as_completed(clip: vs.VideoNode) -> None:
+    # Yields frames as soon as they finish rendering
+    async for fut in frames(clip, prefetch=8).as_completed(concurrency=4):
+        frame_obj = await fut
+        print(f"Finished frame {frame_obj.width}x{frame_obj.height}")
+```
+
+### `for_each(callback, *, yield_cycles=True)`
+
+Asynchronously awaits each future sequentially and invokes `callback(future)`:
 
 ```python
 from concurrent.futures import Future
@@ -113,9 +126,9 @@ import vapoursynth as vs
 from vsengine.video import frames
 
 
-def on_frame_completed(future: Future[vs.VideoFrame]) -> bool:
+async def on_frame_completed(fut: UnifiedFuture[vs.VideoFrame]) -> bool:
     try:
-        frame_obj = future.result()
+        frame_obj = fut.result()
         print(frame_obj.width)
         return True
     except Exception as error:
@@ -123,6 +136,16 @@ def on_frame_completed(future: Future[vs.VideoFrame]) -> bool:
         return False
 
 
-async def run_rendering(clip):
-    await frames(clip, prefetch=8).run_as_completed(on_frame_completed)
+async def run_rendering(clip: vs.VideoNode) -> None:
+    await frames(clip, prefetch=8).for_each(on_frame_completed)
+```
+
+### `consume(callback)`
+
+Dispatches sequential frame processing onto the event loop cycle and returns a `UnifiedFuture[None]` that resolves upon completion:
+
+```python
+# Assuming `on_frame_completed` is a synchronous callback here
+def run_pipeline(clip: vs.VideoNode) -> None:
+    frames(clip, prefetch=8).consume(on_frame_completed).result()
 ```
