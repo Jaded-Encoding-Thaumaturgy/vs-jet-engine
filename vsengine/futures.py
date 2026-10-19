@@ -589,11 +589,13 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
         return get_loop().await_future(fut)
 
     @overload
-    def consume(self, cb: Callable[[Future[T]], Any]) -> UnifiedFuture[None]: ...
+    def consume(self, cb: Callable[[UnifiedFuture[T]], Any]) -> UnifiedFuture[None]: ...
     @overload
-    def consume[U: UnifiedFuture[None]](self, cb: Callable[[Future[T]], Any], future_factory: Callable[[], U]) -> U: ...
+    def consume[U: UnifiedFuture[None]](
+        self, cb: Callable[[UnifiedFuture[T]], Any], future_factory: Callable[[], U]
+    ) -> U: ...
     def consume(
-        self, cb: Callable[[Future[T]], Any], future_factory: Callable[[], UnifiedFuture[None]] | None = None
+        self, cb: Callable[[UnifiedFuture[T]], Any], future_factory: Callable[[], UnifiedFuture[None]] | None = None
     ) -> UnifiedFuture[None]:
         """
         Consume the iterator sequentially, invoking `callback` for each future.
@@ -626,7 +628,7 @@ class UnifiedIterator[T](Iterator[T], AsyncIterator[T]):
                 if not fut.done():
                     yield fut
 
-                res = cb(fut)
+                res = cb(UnifiedFuture.from_future(fut))
                 if res is not None and not res:
                     return
 
