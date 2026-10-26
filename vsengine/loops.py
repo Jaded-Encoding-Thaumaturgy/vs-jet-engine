@@ -12,7 +12,7 @@ import threading
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Coroutine, Generator
 from concurrent.futures import CancelledError, Future
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import wraps
 from typing import Any, overload, override
 
@@ -23,11 +23,6 @@ __all__ = ["Cancelled", "EventLoop", "from_thread", "get_loop", "keep_environmen
 
 class Cancelled(BaseException):
     """Exception raised when an operation has been cancelled."""
-
-
-@contextmanager
-def _noop() -> Generator[None]:
-    yield
 
 
 DONE = Future[None]()
@@ -219,7 +214,7 @@ def keep_environment[**P, R](
     try:
         environment = vs.get_current_environment().use
     except RuntimeError:
-        environment = _noop
+        environment = nullcontext
 
     if inspect.iscoroutinefunction(func):
 
@@ -253,6 +248,7 @@ def from_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs)
     :return: A Future that resolves or rejects depending on the outcome.
     """
 
+    @wraps(func)
     @keep_environment
     def wrapper() -> R:
         return func(*args, **kwargs)
@@ -272,6 +268,7 @@ def to_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -
     :return: A Future representing the execution result.
     """
 
+    @wraps(func)
     @keep_environment
     def wrapper() -> R:
         return func(*args, **kwargs)
