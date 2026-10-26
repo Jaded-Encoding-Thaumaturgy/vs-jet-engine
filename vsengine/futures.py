@@ -869,30 +869,30 @@ def unified[T, **P](
     ```
     """
 
-    def _decorator_generator(func: Callable[P, Iterator[Future[T]]]) -> Callable[P, UnifiedIterator[T]]:
+    def decorator_generator(func: Callable[P, Iterator[Future[T]]]) -> Callable[P, UnifiedIterator[T]]:
         @wraps(func)
-        def _wrapped(*args: P.args, **kwargs: P.kwargs) -> UnifiedIterator[T]:
+        def wrapped(*args: P.args, **kwargs: P.kwargs) -> UnifiedIterator[T]:
             return iterable_class.from_call(func, *args, **kwargs)
 
-        return _wrapped
+        return wrapped
 
-    def _decorator_future(func: Callable[P, Future[T]]) -> Callable[P, UnifiedFuture[T]]:
+    def decorator_future(func: Callable[P, Future[T]]) -> Callable[P, UnifiedFuture[T]]:
         @wraps(func)
-        def _wrapped(*args: P.args, **kwargs: P.kwargs) -> UnifiedFuture[T]:
+        def wrapped(*args: P.args, **kwargs: P.kwargs) -> UnifiedFuture[T]:
             return future_class.from_call(func, *args, **kwargs)
 
-        return _wrapped
+        return wrapped
 
     def decorator(
         func: Callable[P, Iterator[Future[T]]] | Callable[P, Future[T]],
     ) -> Callable[P, UnifiedIterator[T]] | Callable[P, UnifiedFuture[T]]:
         if kind == "generator":
             # pyrefly: ignore [bad-argument-type]
-            return _decorator_generator(func)
+            return decorator_generator(func)
 
         if kind == "future":
             # pyrefly: ignore [bad-argument-type]
-            return _decorator_future(func)
+            return decorator_future(func)
 
         raise NotImplementedError
 

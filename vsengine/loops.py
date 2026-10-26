@@ -254,10 +254,10 @@ def from_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs)
     """
 
     @keep_environment
-    def _wrapper() -> R:
+    def wrapper() -> R:
         return func(*args, **kwargs)
 
-    return get_loop().from_thread(_wrapper)
+    return get_loop().from_thread(wrapper)
 
 
 def to_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
@@ -273,10 +273,10 @@ def to_thread[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -
     """
 
     @keep_environment
-    def _wrapper() -> R:
+    def wrapper() -> R:
         return func(*args, **kwargs)
 
-    return get_loop().to_thread(_wrapper)
+    return get_loop().to_thread(wrapper)
 
 
 async def make_awaitable[T](future: Future[T]) -> T:

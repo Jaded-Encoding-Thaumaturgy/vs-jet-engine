@@ -92,9 +92,7 @@ class _TempModule(AbstractContextManager[None]):
 
     def __enter__(self) -> None:
         mod_name = self.mod_name
-
         self._saved_module.append(sys.modules.get(mod_name))
-
         sys.modules[mod_name] = self.module
 
     def __exit__(self, exc: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None:
@@ -310,7 +308,6 @@ class Script[EnvT: (vs.Environment, ManagedEnvironment)](AbstractContextManager[
             _ModifiedArgv0(self.filename) if (self.filename is not None and self.path is not None) else nullcontext(),
         ):
             _set_module_dunders(self.module, self.filename)
-
             exec(self.code, self.module.__dict__, self.module.__dict__)  # noqa: S102
 
     def _del_future_refs(self) -> None:
