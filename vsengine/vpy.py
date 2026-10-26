@@ -33,8 +33,6 @@ from .policy import ManagedEnvironment, Policy
 
 __all__ = ["ExecutionError", "Script", "load_code", "load_script"]
 
-type Runner[R] = Callable[[Callable[[], R]], Future[R]]
-
 
 class ExecutionError(Exception):
     """
