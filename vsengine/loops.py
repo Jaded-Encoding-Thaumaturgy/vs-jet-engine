@@ -211,9 +211,12 @@ def keep_environment[**P, R](
     :param func: The function to decorate.
     :return: A wrapped function that maintains the captured environment.
     """
-    try:
-        environment = vs.get_current_environment().use
-    except RuntimeError:
+    if vs.has_policy():
+        try:
+            environment = vs.get_current_environment().use
+        except RuntimeError:
+            environment = nullcontext
+    else:
         environment = nullcontext
 
     if inspect.iscoroutinefunction(func):
