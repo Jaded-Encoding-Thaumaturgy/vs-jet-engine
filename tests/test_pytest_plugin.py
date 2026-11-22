@@ -11,7 +11,7 @@ import importlib
 from collections.abc import Callable, Generator
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 import vapoursynth
@@ -37,6 +37,7 @@ def reset_hospice_state() -> None: ...
 def restore_pytest_globals(request: pytest.FixtureRequest) -> Generator[None]:
     session = request.session
     orig_policy = session.stash.get(vpy_pytest.policy_key, None)
+    orig_group = session.stash.get(vpy_pytest.policy_group_key, None)
     orig_env = session.stash.get(vpy_pytest.env_key, None)
     orig_stage = session.stash.get(vpy_pytest.stage_key, "no-core")
 
@@ -44,6 +45,7 @@ def restore_pytest_globals(request: pytest.FixtureRequest) -> Generator[None]:
         yield
     finally:
         session.stash[vpy_pytest.policy_key] = orig_policy
+        session.stash[vpy_pytest.policy_group_key] = orig_group
         session.stash[vpy_pytest.env_key] = orig_env
         session.stash[vpy_pytest.stage_key] = orig_stage
 
@@ -86,22 +88,33 @@ class MockMarker:
         self.kwargs = kwargs or {}
 
 
+class MockHook:
+    def __init__(self, policies: Any = None) -> None:
+        self.policies = policies
+
+    def pytest_vpy_policies(self, config: Any, item: Any) -> Any:
+        return self.policies
+
+
 class MockDefinition:
-    def __init__(self, marker: MockMarker | None) -> None:
+    def __init__(self, marker: MockMarker | None, policies: Any = None) -> None:
         self.marker = marker
+        self.config = MockConfig()
+        self.ihook = MockHook(policies)
+        self.nodeid = "test.py::test_dummy"
 
     def get_closest_marker(self, name: str) -> MockMarker | None:
         return self.marker
 
 
 class MockMetafunc:
-    def __init__(self, marker: MockMarker | None) -> None:
-        self.definition = MockDefinition(marker)
+    def __init__(self, marker: MockMarker | None, policies: Any = None) -> None:
+        self.definition = MockDefinition(marker, policies)
         self.fixturenames = list[str]()
-        self.parametrized = list[tuple[str, list[Any], Any]]()
+        self.parametrized = list[tuple[Any, list[Any], Any]]()
 
-    def parametrize(self, name: str, stages: list[Any], ids: Any) -> None:
-        self.parametrized.append((name, stages, ids))
+    def parametrize(self, argnames: Any, argvalues: list[Any], ids: Any = None) -> None:
+        self.parametrized.append((argnames, argvalues, ids))
 
 
 class MockItem:
@@ -866,3 +879,454 @@ def test_plugin_integration(pytester: pytest.Pytester, request: pytest.FixtureRe
         policy = Policy(GlobalStore())
         policy.register()
         request.session.stash[vpy_pytest.policy_key] = policy
+
+
+# Named policies (pytest_vpy_policies hook)
+class RecordingPolicy(Policy):
+    """A real Policy that never touches VapourSynth's registration."""
+
+    def __init__(self, flags_creation: int | None = None) -> None:
+        super().__init__(GlobalStore(), flags_creation=flags_creation)
+        self.registered = False
+        self.new_envs = list[MockEnv]()
+
+    @property
+    @override
+    def is_registered(self) -> bool:
+        return self.registered
+
+    @override
+    def register(self) -> None:
+        self.registered = True
+
+    @override
+    def unregister(self) -> None:
+        self.registered = False
+
+    @override
+    def new_environment(self, flags_creation: int | None = None, logger: Any = None) -> ManagedEnvironment:
+        env = MockEnv()
+        self.new_envs.append(env)
+        return cast(ManagedEnvironment, env)
+
+
+class MockPolicyItem(MockItem):
+    def __init__(self, session: pytest.Session, policies: Any, **kwargs: Any) -> None:
+        super().__init__(session, **kwargs)
+        self.config = session.config
+        self.ihook = MockHook(policies)
+        self.nodeid = f"{self.path}::test_dummy"
+
+
+def _custom_factory() -> Policy:
+    return RecordingPolicy()
+
+
+def test_pytest_generate_tests_with_policies() -> None:
+    policies = {"default": vpy_pytest.default_policy, "custom": _custom_factory}
+
+    meta = MockMetafunc(MockMarker(("no-policy", "initial-core")), policies)
+    vpy_pytest.pytest_generate_tests(meta)
+
+    assert meta.fixturenames == ["vpy_stage", "vpy_policy_name"]
+    [(argnames, argvalues, _)] = meta.parametrized
+    assert argnames == ("vpy_stage", "vpy_policy_name")
+    assert [p.id for p in argvalues] == ["no-policy", "initial-core-default", "initial-core-custom"]
+    assert [tuple(p.values) for p in argvalues] == [
+        ("no-policy", None),
+        ("initial-core", "default"),
+        ("initial-core", "custom"),
+    ]
+
+
+def test_pytest_generate_tests_policy_selection() -> None:
+    policies = {"default": vpy_pytest.default_policy, "a": _custom_factory, "b": _custom_factory}
+
+    # The selection follows the order of the hook result, not the marker.
+    meta = MockMetafunc(MockMarker(("initial-core",), {"policies": ["b", "a", "b"]}), policies)
+    vpy_pytest.pytest_generate_tests(meta)
+    [(_, argvalues, _)] = meta.parametrized
+    assert [p.id for p in argvalues] == ["initial-core-a", "initial-core-b"]
+
+
+def test_pytest_generate_tests_default_selection_without_hook() -> None:
+    meta = MockMetafunc(MockMarker((), {"policies": ["default"]}))
+    vpy_pytest.pytest_generate_tests(meta)
+    assert meta.fixturenames == ["vpy_stage"]
+    assert meta.parametrized == [("vpy_stage", list(vpy_pytest.DEFAULT_STAGES), vpy_pytest.DEFAULT_STAGES)]
+
+
+@pytest.mark.parametrize(
+    ("policies", "selected", "error", "match"),
+    [
+        (None, ["custom"], ValueError, "No pytest_vpy_policies hook"),
+        ({"custom": _custom_factory}, ["typo"], ValueError, r"Unknown vpy policies \['typo'\]"),
+        ({"custom": _custom_factory}, "custom", TypeError, "must be a sequence of names"),
+        ({"custom": _custom_factory}, [], ValueError, "must not be empty"),
+    ],
+)
+def test_pytest_generate_tests_invalid_selection(
+    policies: Any, selected: Any, error: type[Exception], match: str
+) -> None:
+    meta = MockMetafunc(MockMarker((), {"policies": selected}), policies)
+    with pytest.raises(error, match=match):
+        vpy_pytest.pytest_generate_tests(meta)
+
+
+@pytest.mark.parametrize(
+    ("policies", "match"),
+    [
+        ({}, "non-empty mapping"),
+        ([("custom", _custom_factory)], "non-empty mapping"),
+        ({"": _custom_factory}, "invalid policy name"),
+        ({1: _custom_factory}, "invalid policy name"),
+        ({"custom": "not callable"}, "not callable"),
+    ],
+)
+def test_pytest_generate_tests_invalid_hook_result(policies: Any, match: str) -> None:
+    meta = MockMetafunc(MockMarker(()), policies)
+    with pytest.raises(TypeError, match=match):
+        vpy_pytest.pytest_generate_tests(meta)
+
+
+def test_instantiate_policy_flags_only_for_default() -> None:
+    config = MockConfig()
+    setattr(config.option, "--vpy-flags", 4)
+
+    default = vpy_pytest._instantiate_policy(cast(pytest.Config, config), vpy_pytest.default_policy, "default")
+    assert default.flags_creation == 4
+
+    custom = vpy_pytest._instantiate_policy(cast(pytest.Config, config), lambda: RecordingPolicy(1), "custom")
+    assert custom.flags_creation == 1
+
+
+def test_instantiate_policy_invalid_results() -> None:
+    config = cast(pytest.Config, MockConfig())
+
+    with pytest.raises(TypeError, match="must return a Policy, not str"):
+        vpy_pytest._instantiate_policy(config, lambda: cast(Policy, "nope"), "custom")
+
+    def registered() -> Policy:
+        policy = RecordingPolicy()
+        policy.register()
+        return policy
+
+    with pytest.raises(ValueError, match="returned a registered Policy"):
+        vpy_pytest._instantiate_policy(config, registered, "custom")
+
+
+def test_ensure_policy_group_switch(fake_session_factory: Callable[[], pytest.Session]) -> None:
+    session = fake_session_factory()
+    old_policy = RecordingPolicy()
+    old_policy.register()
+    old_env = MockEnv()
+    session.stash[vpy_pytest.policy_key] = old_policy
+    session.stash[vpy_pytest.policy_group_key] = None
+    session.stash[vpy_pytest.env_key] = cast(ManagedEnvironment, old_env)
+    session.stash[vpy_pytest.stage_key] = "initial-core"
+
+    item = MockPolicyItem(session, {"custom": _custom_factory}, path=Path("test_a.py"))
+    policy = vpy_pytest._ensure_policy_group(cast(pytest.Item, item), "custom")
+
+    assert isinstance(policy, RecordingPolicy)
+    assert policy is not old_policy
+    assert not old_policy.registered
+    assert old_env.disposed
+    assert session.stash[vpy_pytest.env_key] is None
+    assert session.stash[vpy_pytest.stage_key] == "no-core"
+    assert session.stash[vpy_pytest.policy_group_key] == (Path("test_a.py"), "custom")
+
+    # Same group: the policy is reused.
+    assert vpy_pytest._ensure_policy_group(cast(pytest.Item, item), "custom") is policy
+
+    # Same name in another module: a new policy is created.
+    other = MockPolicyItem(session, {"custom": _custom_factory}, path=Path("test_b.py"))
+    assert vpy_pytest._ensure_policy_group(cast(pytest.Item, other), "custom") is not policy
+
+
+def test_ensure_policy_group_missing_name(fake_session_factory: Callable[[], pytest.Session]) -> None:
+    session = fake_session_factory()
+
+    item = MockPolicyItem(session, {"custom": _custom_factory})
+    with pytest.raises(ValueError, match="is not returned by pytest_vpy_policies"):
+        vpy_pytest._ensure_policy_group(cast(pytest.Item, item), "gone")
+
+    no_hook = MockPolicyItem(session, None)
+    with pytest.raises(ValueError, match="No pytest_vpy_policies hook"):
+        vpy_pytest._ensure_policy_group(cast(pytest.Item, no_hook), "custom")
+
+
+def test_pytest_collection_modifyitems_policy_groups(request: pytest.FixtureRequest) -> None:
+    config_run = MockConfig(collectonly=False)
+    p = Path("test.py")
+
+    def make(stage: str, name: str | None = None) -> MockItem:
+        params: dict[str, Any] = {"vpy_stage": stage}
+        if stage != "no-policy":
+            params["vpy_policy_name"] = name
+        return MockItem(path=p, callspec=MockCallspec(**params), parent=request.node)
+
+    a_initial = make("initial-core", "a")
+    b_initial = make("initial-core", "b")
+    a_unique = make("unique-core", "a")
+    b_reloaded = make("reloaded-core", "b")
+    no_policy = make("no-policy")
+    other = MockItem(path=p)
+
+    items: list[Any] = [a_initial, b_initial, a_unique, b_reloaded, no_policy, other]
+    vpy_pytest.pytest_collection_modifyitems(request.session, config_run, items)
+
+    def describe(item: Any) -> Any:
+        if isinstance(item, vpy_pytest.EnsureCleanEnvironment):
+            return (item.name, item.stage, item.policy_name)
+        return item
+
+    assert [describe(i) for i in items] == [
+        no_policy,
+        a_initial,
+        ("@check-clean-environment[initial-core-a]", "initial-core", "a"),
+        a_unique,
+        b_initial,
+        ("@check-clean-environment[initial-core-b]", "initial-core", "b"),
+        b_reloaded,
+        ("@check-clean-environment[reloaded-core-b]", "reloaded-core", "b"),
+        other,
+    ]
+    assert items[2].reportinfo()[2] == "cleaning up: initial-core (a)"
+
+
+@pytest.fixture
+def vpy_pytester(pytester: pytest.Pytester, request: pytest.FixtureRequest) -> Generator[pytest.Pytester]:
+    """A pytester that can run vpy tests in-process, and restores the outer session policy afterwards."""
+    forcefully_unregister_policy()
+
+    pytester.makeini(
+        """
+        [pytest]
+        asyncio_mode = auto
+        asyncio_default_fixture_loop_scope = function
+        """
+    )
+    try:
+        yield pytester
+    finally:
+        policy = Policy(GlobalStore())
+        policy.register()
+        request.session.stash[vpy_pytest.policy_key] = policy
+
+
+def test_plugin_policies_integration(vpy_pytester: pytest.Pytester) -> None:
+    vpy_pytester.makeconftest(
+        """
+        import vapoursynth
+        from vsengine.policy import GlobalStore, Policy
+        from vsengine.pytest import default_policy
+
+        class CustomPolicy(Policy):
+            pass
+
+        def custom_policy():
+            return CustomPolicy(GlobalStore(), flags_creation=vapoursynth.ENABLE_GRAPH_INSPECTION)
+
+        def pytest_vpy_policies(config, item):
+            return {"default": default_policy, "custom": custom_policy}
+        """
+    )
+    vpy_pytester.makepyfile(
+        """
+        import pytest
+        import vapoursynth
+        from conftest import CustomPolicy
+
+        SEEN = {}
+
+        @pytest.mark.vpy
+        def test_both(vpy_policy, vpy_policy_name, vpy_stage):
+            assert vpy_policy.is_registered
+            assert vapoursynth.get_current_environment() is not None
+            assert isinstance(vpy_policy, CustomPolicy) == (vpy_policy_name == "custom")
+            # The custom policy flags apply to shared stages too.
+            inspectable = vapoursynth.core.std.BlankClip().is_inspectable(0)
+            assert inspectable == (vpy_policy_name == "custom")
+            # One policy instance per policy name and module.
+            assert SEEN.setdefault(vpy_policy_name, vpy_policy) is vpy_policy
+
+        @pytest.mark.vpy("no-policy", "unique-core", policies=["custom"])
+        def test_selected(vpy_policy, vpy_policy_name, vpy_stage):
+            if vpy_stage == "no-policy":
+                assert vpy_policy_name is None
+                assert not vpy_policy.is_registered
+            else:
+                assert vpy_policy_name == "custom"
+                assert vpy_policy is SEEN["custom"]
+                assert vpy_policy.is_registered
+        """
+    )
+
+    result = vpy_pytester.runpytest_inprocess("-v")
+    result.assert_outcomes(passed=10)
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_selected[[]no-policy[]] PASSED*",
+            "*::test_both[[]initial-core-default[]] PASSED*",
+            "*::@check-clean-environment[[]initial-core-default[]] PASSED*",
+            "*::test_both[[]reloaded-core-default[]] PASSED*",
+            "*::@check-clean-environment[[]reloaded-core-default[]] PASSED*",
+            "*::test_both[[]initial-core-custom[]] PASSED*",
+            "*::@check-clean-environment[[]initial-core-custom[]] PASSED*",
+            "*::test_both[[]reloaded-core-custom[]] PASSED*",
+            "*::@check-clean-environment[[]reloaded-core-custom[]] PASSED*",
+            "*::test_selected[[]unique-core-custom[]] PASSED*",
+        ]
+    )
+
+
+def test_plugin_policies_nested_conftest(vpy_pytester: pytest.Pytester) -> None:
+    vpy_pytester.makeconftest(
+        """
+        from vsengine.pytest import default_policy
+
+        def pytest_vpy_policies(config, item):
+            return {"root": default_policy}
+        """
+    )
+    vpy_pytester.mkpydir("sub")
+    vpy_pytester.makepyfile(
+        **{
+            "sub/conftest": """
+                from vsengine.pytest import default_policy
+
+                def pytest_vpy_policies(config, item):
+                    return {"sub": default_policy}
+            """,
+            "sub/test_sub": """
+                import pytest
+
+                @pytest.mark.vpy("initial-core")
+                def test_sub(vpy_policy_name):
+                    assert vpy_policy_name == "sub"
+            """,
+            "test_root": """
+                import pytest
+
+                @pytest.mark.vpy("initial-core")
+                def test_root(vpy_policy_name):
+                    assert vpy_policy_name == "root"
+            """,
+        }
+    )
+
+    result = vpy_pytester.runpytest_inprocess("-v")
+    result.assert_outcomes(passed=4)
+    result.stdout.fnmatch_lines_random(
+        [
+            "*test_sub.py::test_sub[[]initial-core-sub[]] PASSED*",
+            "*test_root.py::test_root[[]initial-core-root[]] PASSED*",
+        ]
+    )
+
+
+def test_plugin_policies_unknown_name(vpy_pytester: pytest.Pytester) -> None:
+    vpy_pytester.makeconftest(
+        """
+        from vsengine.pytest import default_policy
+
+        def pytest_vpy_policies(config, item):
+            return {"custom": default_policy}
+        """
+    )
+    vpy_pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.vpy(policies=["typo"])
+        def test_dummy():
+            pass
+        """
+    )
+
+    result = vpy_pytester.runpytest_inprocess()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*Unknown vpy policies [[]'typo'[]]. Available policies: [[]'custom'[]].*"])
+
+
+def test_plugin_policies_leak_per_group(vpy_pytester: pytest.Pytester) -> None:
+    vpy_pytester.makeconftest(
+        """
+        from vsengine.pytest import default_policy
+
+        def pytest_vpy_policies(config, item):
+            return {"default": default_policy, "custom": default_policy}
+        """
+    )
+    vpy_pytester.makepyfile(
+        """
+        import pytest
+        import vapoursynth
+
+        LEAK = []
+
+        @pytest.mark.vpy("initial-core")
+        def test_leak(vpy_policy_name):
+            if vpy_policy_name == "custom":
+                LEAK.append(vapoursynth.core.core)
+        """
+    )
+
+    result = vpy_pytester.runpytest_inprocess("-v")
+    result.assert_outcomes(passed=3, failed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*::@check-clean-environment[[]initial-core-default[]] PASSED*",
+            "*::@check-clean-environment[[]initial-core-custom[]] FAILED*",
+        ]
+    )
+
+
+def test_plugin_policies_vpy_flags_default_only(vpy_pytester: pytest.Pytester) -> None:
+    vpy_pytester.makeconftest(
+        """
+        from vsengine.policy import Policy
+        from vsengine.pytest import default_policy
+
+        def pytest_vpy_policies(config, item):
+            return {"default": default_policy, "custom": lambda: Policy()}
+        """
+    )
+    vpy_pytester.makepyfile(
+        """
+        import pytest
+        import vapoursynth
+
+        @pytest.mark.vpy("initial-core")
+        def test_flags(vpy_policy, vpy_policy_name):
+            expected = int(vapoursynth.ENABLE_GRAPH_INSPECTION) if vpy_policy_name == "default" else 0
+            assert vpy_policy.flags_creation == expected
+        """
+    )
+
+    result = vpy_pytester.runpytest_inprocess(f"--vpy-flags={int(vapoursynth.ENABLE_GRAPH_INSPECTION)}")
+    result.assert_outcomes(passed=4)
+
+
+def test_plugin_without_hook_keeps_ids(vpy_pytester: pytest.Pytester) -> None:
+    vpy_pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.vpy
+        def test_dummy(vpy_policy_name):
+            assert vpy_policy_name == "default"
+        """
+    )
+
+    result = vpy_pytester.runpytest_inprocess("-v")
+    result.assert_outcomes(passed=4)
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_dummy[[]initial-core[]] PASSED*",
+            "*::@check-clean-environment[[]initial-core[]] PASSED*",
+            "*::test_dummy[[]reloaded-core[]] PASSED*",
+            "*::@check-clean-environment[[]reloaded-core[]] PASSED*",
+        ]
+    )

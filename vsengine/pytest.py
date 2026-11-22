@@ -3,10 +3,11 @@
 # Copyright (C) 2026  Jaded-Encoding-Thaumaturgy
 # This project is licensed under the EUPL-1.2
 # SPDX-License-Identifier: EUPL-1.2
+
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Collection, Generator, Mapping
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, override, runtime_checkable
@@ -18,6 +19,7 @@ import vapoursynth as vs
 if TYPE_CHECKING:
     from _pytest._code.code import TerminalRepr, TracebackStyle
     from _pytest._io import TerminalWriter
+    from _pytest.mark import ParameterSet
     from _pytest.python import CallSpec2
 else:
     TerminalRepr = TracebackStyle = TerminalWriter = CallSpec2 = object
@@ -25,6 +27,9 @@ else:
 
 import vsengine._hospice as hospice
 from vsengine.policy import GlobalStore, ManagedEnvironment, Policy
+
+type PolicyFactory = Callable[[], Policy]
+"""A callable without arguments that returns a new, unregistered Policy."""
 
 
 @runtime_checkable
@@ -34,18 +39,56 @@ class _HasCallSpec(Protocol):
 
 DEFAULT_STAGES = ("initial-core", "reloaded-core")
 KNOWN_STAGES = ("no-policy", "no-core", "initial-core", "reloaded-core", "unique-core")
-
+SHARED_STAGES = ("initial-core", "reloaded-core")
+DEFAULT_POLICY_NAME = "default"
 DEFAULT_ERROR_MESSAGE = (
     "Your test suite left a dangling object to a vapoursynth core.",
     "Please make sure this does not happen, as this might cause some previewers to crash after reloading a script.",
 )
 
 policy_key = pytest.StashKey[Policy | None]()
+policy_group_key = pytest.StashKey[tuple[Path, str] | None]()
 env_key = pytest.StashKey[ManagedEnvironment | None]()
 env_ctx_key = pytest.StashKey[AbstractContextManager[None] | None]()
 stage_key = pytest.StashKey[str]()
 leaked_key = pytest.StashKey[bool]()
 failed_key = pytest.StashKey[bool]()
+
+
+def default_policy() -> Policy:
+    """
+    The built-in policy factory.
+
+    It creates a Policy backed by a GlobalStore.
+    The ``--vpy-flags`` command line option only applies to policies created by this factory.
+    Use it in ``pytest_vpy_policies`` to keep the default policy next to your own policies.
+    """
+    return Policy(GlobalStore())
+
+
+class _VpyHookSpecs:
+    @pytest.hookspec(firstresult=True)
+    def pytest_vpy_policies(self, config: pytest.Config, item: pytest.Item) -> Mapping[str, PolicyFactory] | None:
+        """
+        Return the named policy factories for ``@pytest.mark.vpy`` tests.
+
+        Each factory takes no arguments and returns a new, unregistered Policy.
+        When a mapping is returned, every vpy test runs once per policy and stage.
+        The ``no-policy`` stage does not run per policy.
+        Use ``@pytest.mark.vpy(policies=[...])`` to select some of the names.
+
+        The closest conftest that returns a mapping wins.
+        If no mapping is returned, the tests use only the default policy.
+
+        Args:
+            config: The pytest config object.
+            item: The test item. During collection, this is the function definition.
+        """
+
+
+def pytest_addhooks(pluginmanager: pytest.PytestPluginManager) -> None:
+    # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_addhooks
+    pluginmanager.add_hookspecs(_VpyHookSpecs)
 
 
 @pytest.fixture
@@ -69,13 +112,19 @@ def vpy_stage(request: pytest.FixtureRequest) -> str:
     return request.session.stash.get(stage_key, "no-core")
 
 
+@pytest.fixture
+def vpy_policy_name(vpy_stage: str) -> str | None:
+    """Returns the name of the policy the test runs with, or None in the no-policy stage."""
+    return None if vpy_stage == "no-policy" else DEFAULT_POLICY_NAME
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--vpy-flags",
         action="store",
         type=int,
         default=None,
-        help="Default creation flags for VapourSynth environments created by vsengine.",
+        help="Default creation flags for VapourSynth environments created by the default vsengine policy.",
     )
 
 
@@ -84,8 +133,9 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         'vpy(*stages: Literal["no-policy", "no-core", "initial-core", "reloaded-core", "unique-core"], '
-        "flags_creation: int = ...): "
-        "Mark what stages should be run, with optional core creation flags override. "
+        "flags_creation: int = ..., policies: Sequence[str] = ...): "
+        "Mark what stages should be run, with optional core creation flags override "
+        "and a selection of the policies returned by the pytest_vpy_policies hook. "
         "(Defaults to initial-core + reloaded-core)",
     )
 
@@ -97,13 +147,14 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     env_ctx = None
 
     if not vs.has_policy():
-        policy = _create_default_policy(session)
+        policy = _instantiate_policy(session.config, default_policy, DEFAULT_POLICY_NAME)
         policy.register()
         env = policy.new_environment()
         env_ctx = env.use()
         env_ctx.__enter__()
 
     session.stash[policy_key] = policy
+    session.stash[policy_group_key] = None
     session.stash[env_key] = env
     session.stash[env_ctx_key] = env_ctx
     session.stash[stage_key] = "no-core"
@@ -127,15 +178,37 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
     policy.unregister()
     session.stash[policy_key] = None
+    session.stash[policy_group_key] = None
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_generate_tests
-    if marker := metafunc.definition.get_closest_marker("vpy"):
-        if "vpy_stage" not in metafunc.fixturenames:
-            metafunc.fixturenames.append("vpy_stage")
-        stages = marker.args or DEFAULT_STAGES
+    if not (marker := metafunc.definition.get_closest_marker("vpy")):
+        return
+
+    if "vpy_stage" not in metafunc.fixturenames:
+        metafunc.fixturenames.append("vpy_stage")
+    stages = marker.args or DEFAULT_STAGES
+
+    available = _get_policy_factories(metafunc.definition)
+    names = _select_policy_names(marker.kwargs.get("policies"), available)
+
+    # Without the hook, keep the test IDs unchanged.
+    if available is None:
         metafunc.parametrize("vpy_stage", list(stages), ids=stages)
+        return
+
+    if "vpy_policy_name" not in metafunc.fixturenames:
+        metafunc.fixturenames.append("vpy_policy_name")
+
+    params: list[ParameterSet] = []
+    for stage in stages:
+        if stage == "no-policy":
+            params.append(pytest.param(stage, None, id=stage))
+        else:
+            params.extend(pytest.param(stage, name, id=f"{stage}-{name}") for name in names)
+
+    metafunc.parametrize(("vpy_stage", "vpy_policy_name"), params)
 
 
 def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -177,38 +250,53 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     new_items = list[pytest.Item]()
 
     for path, m_items in module_items.items():
-        stages = {stage: list[pytest.Item]() for stage in KNOWN_STAGES}
+        no_policy_items = list[pytest.Item]()
+        # Policy name (None without the hook) -> stage -> items. Dicts keep the order in which names are seen.
+        policy_groups = dict[str | None, dict[str, list[pytest.Item]]]()
         other_items = list[pytest.Item]()
 
         for item in m_items:
             callspec: CallSpec2 | None = getattr(item, "callspec", None)
-            if callspec and "vpy_stage" in callspec.params:
-                if (s := str(callspec.params["vpy_stage"])) in stages:
-                    stages[s].append(item)
-                else:
-                    other_items.append(item)
+            if not callspec or "vpy_stage" not in callspec.params:
+                other_items.append(item)
+                continue
+
+            stage = str(callspec.params["vpy_stage"])
+            if stage == "no-policy":
+                no_policy_items.append(item)
+            elif stage in KNOWN_STAGES:
+                name = None if (n := callspec.params.get("vpy_policy_name")) is None else str(n)
+                group = policy_groups.setdefault(name, {s: [] for s in KNOWN_STAGES if s != "no-policy"})
+                group[stage].append(item)
             else:
                 other_items.append(item)
 
-        if any(len(stages[s]) > 0 for s in stages):
-            # Find a suitable parent collector (the parent of the first vpy item, typically a Module)
-            first_vpy_item = next(item for stage in stages for item in stages[stage] if item)
-            parent_collector = first_vpy_item.parent or session
+        if not no_policy_items and not policy_groups:
+            new_items.extend(m_items)
+            continue
 
-            for s in KNOWN_STAGES:
-                new_items.extend(stages[s])
-                if s in ("initial-core", "reloaded-core") and len(stages[s]) > 0:
+        # Find a suitable parent collector (the parent of the first vpy item, typically a Module)
+        first_vpy_item = next(
+            iter(no_policy_items or (item for group in policy_groups.values() for s in group for item in group[s]))
+        )
+        parent_collector = first_vpy_item.parent or session
+
+        new_items.extend(no_policy_items)
+        for name, group in policy_groups.items():
+            for stage, stage_items in group.items():
+                new_items.extend(stage_items)
+                if stage in SHARED_STAGES and stage_items:
+                    check_id = stage if name is None else f"{stage}-{name}"
                     new_items.append(
                         EnsureCleanEnvironment.from_parent(
                             parent_collector,
-                            name=f"@check-clean-environment[{s}]",
-                            stage=s,
+                            name=f"@check-clean-environment[{check_id}]",
+                            stage=stage,
+                            policy_name=name,
                             path=path,
                         )
                     )
-            new_items.extend(other_items)
-        else:
-            new_items.extend(m_items)
+        new_items.extend(other_items)
 
     items[:] = new_items
 
@@ -219,29 +307,38 @@ def pytest_runtest_protocol(
 ) -> Generator[None, pluggy.Result[Any], None]:
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_runtest_protocol
     callspec: CallSpec2 | None = getattr(item, "callspec", None)
-    is_vpy_stage = callspec and "vpy_stage" in callspec.params
+    params = dict(callspec.params) if callspec else dict[str, object]()
+    is_vpy_stage = "vpy_stage" in params
     marker = item.get_closest_marker("vpy")
 
     if not is_vpy_stage and marker is None:
         yield
         return
 
-    # If it is a vpy test, make sure policy is registered
-    if not (policy := item.session.stash.get(policy_key, None)):
-        item.session.stash[policy_key] = policy = _create_default_policy(item.session)
+    stage_param = str(params["vpy_stage"]) if is_vpy_stage else "no-core"
+    policy_name = params.get("vpy_policy_name")
+    flags_creation = marker.kwargs.get("flags_creation", None) if marker else None
+
+    # If it is a vpy test, make sure the right policy exists.
+    # The no-policy stage unregisters whatever policy is active, so it does not need a specific one.
+    if stage_param == "no-policy":
+        if not (policy := item.session.stash.get(policy_key, None)):
+            item.session.stash[policy_key] = policy = _instantiate_policy(
+                item.session.config, default_policy, DEFAULT_POLICY_NAME
+            )
+    else:
+        policy = _ensure_policy_group(item, None if policy_name is None else str(policy_name))
 
     env = item.session.stash.get(env_key, None)
     stage = item.session.stash.get(stage_key, "no-core")
-
-    stage_param = str(callspec.params["vpy_stage"]) if is_vpy_stage and callspec else "no-core"
-    flags_creation = marker.kwargs.get("flags_creation", None) if marker else None
 
     # Check flags_creation constraints for shared and core-less stages
     if stage_param != "unique-core" and flags_creation is not None and flags_creation != policy.flags_creation:
         raise ValueError(
             f"Cannot specify custom flags_creation={flags_creation} for stage '{stage_param}'. "
             f"Only 'unique-core' stage supports per-test creation flags overrides. "
-            f"For shared stages, configure flags globally (e.g. via --vpy-flags)."
+            f"For shared stages, configure flags globally (e.g. via --vpy-flags) "
+            f"or use a named policy from the pytest_vpy_policies hook."
         )
 
     # Ensure policy registration matches the stage
@@ -280,7 +377,7 @@ def pytest_runtest_protocol(
     if (
         stage_param == "reloaded-core"
         or stage_param != stage
-        or (stage_param in ("initial-core", "reloaded-core") and (env is None or env.disposed))
+        or (stage_param in SHARED_STAGES and (env is None or env.disposed))
         or (stage_param in ("no-core", "no-policy") and env)
     ):
         if stage_param == "initial-core":
@@ -320,9 +417,107 @@ def pytest_runtest_makereport(
         report.longrepr = CleanupFailed(report.longrepr, err_message)
 
 
-def _create_default_policy(session: pytest.Session) -> Policy:
-    flags = session.config.getoption("--vpy-flags", default=None)
-    return Policy(GlobalStore(), flags_creation=flags)
+def _instantiate_policy(config: pytest.Config, factory: PolicyFactory, name: str) -> Policy:
+    policy = factory()
+
+    if not isinstance(policy, Policy):
+        raise TypeError(f"The factory of the vpy policy {name!r} must return a Policy, not {type(policy).__name__}.")
+    if policy.is_registered:
+        raise ValueError(
+            f"The factory of the vpy policy {name!r} returned a registered Policy. "
+            "Return an unregistered Policy: the vsengine pytest plugin registers it when needed."
+        )
+
+    # --vpy-flags only overrides the built-in default policy. Named policies keep their own flags.
+    if factory is default_policy and (flags := config.getoption("--vpy-flags", default=None)) is not None:
+        policy.flags_creation = flags
+
+    return policy
+
+
+def _get_policy_factories(item: pytest.Item) -> Mapping[str, PolicyFactory] | None:
+    result: object = item.ihook.pytest_vpy_policies(config=item.config, item=item)
+
+    if result is None:
+        return None
+
+    if not isinstance(result, Mapping) or not result:
+        raise TypeError(
+            f"pytest_vpy_policies must return a non-empty mapping of policy names to factories, not {result!r}."
+        )
+
+    factories = dict[str, PolicyFactory]()
+    for name, factory in result.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError(
+                f"pytest_vpy_policies returned an invalid policy name: {name!r}. Names must be non-empty strings."
+            )
+        if not callable(factory):
+            raise TypeError(f"pytest_vpy_policies returned a factory for {name!r} that is not callable: {factory!r}.")
+        factories[name] = factory
+
+    return factories
+
+
+def _select_policy_names(selected: object, available: Mapping[str, PolicyFactory] | None) -> list[str]:
+    known = list(available) if available is not None else [DEFAULT_POLICY_NAME]
+
+    if selected is None:
+        return known
+
+    if isinstance(selected, str) or not isinstance(selected, Collection):
+        raise TypeError(f"The 'policies' argument of the vpy marker must be a sequence of names, not {selected!r}.")
+    if not selected:
+        raise ValueError("The 'policies' argument of the vpy marker must not be empty.")
+
+    if unknown := [name for name in selected if name not in known]:
+        hint = "" if available is not None else " No pytest_vpy_policies hook returned policies for this test."
+        raise ValueError(f"Unknown vpy policies {unknown!r}. Available policies: {known!r}.{hint}")
+
+    return [name for name in known if name in selected]
+
+
+def _ensure_policy_group(item: pytest.Item, policy_name: str | None) -> Policy:
+    session = item.session
+    group = None if policy_name is None else (item.path, policy_name)
+    policy = session.stash.get(policy_key, None)
+
+    if policy is not None and session.stash.get(policy_group_key, None) == group:
+        return policy
+
+    if policy is not None:
+        if (env := session.stash.get(env_key, None)) is not None:
+            if not env.disposed:
+                env.dispose()
+            session.stash[env_key] = None
+        if policy.is_registered:
+            policy.unregister()
+
+    policy = _instantiate_policy(
+        *(session.config, default_policy, DEFAULT_POLICY_NAME)
+        if policy_name is None
+        else (item.config, _resolve_policy_factory(item, policy_name), policy_name)
+    )
+
+    session.stash[policy_key] = policy
+    session.stash[policy_group_key] = group
+    session.stash[stage_key] = "no-core"
+    return policy
+
+
+def _resolve_policy_factory(item: pytest.Item, policy_name: str) -> PolicyFactory:
+    if (available := _get_policy_factories(item)) is None:
+        if policy_name == DEFAULT_POLICY_NAME:
+            return default_policy
+        raise ValueError(f"No pytest_vpy_policies hook returned policies for {item.nodeid}.")
+
+    if (factory := available.get(policy_name)) is None:
+        raise ValueError(
+            f"The vpy policy {policy_name!r} is not returned by pytest_vpy_policies for {item.nodeid} anymore. "
+            f"Available policies: {list(available)!r}."
+        )
+
+    return factory
 
 
 def _vpy_policy_impl(session: pytest.Session | None = None) -> Policy:
@@ -382,9 +577,10 @@ class CleanupFailed(TerminalRepr):
 
 
 class EnsureCleanEnvironment(pytest.Item):
-    def __init__(self, *, stage: str, **kwargs: Any) -> None:
+    def __init__(self, *, stage: str, policy_name: str | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.stage = stage
+        self.policy_name = policy_name
 
     def runtest(self) -> None:
         policy = self.session.stash.get(policy_key, None)
@@ -410,4 +606,5 @@ class EnsureCleanEnvironment(pytest.Item):
 
     @override
     def reportinfo(self) -> tuple[Path, None, str]:
-        return self.path, None, f"cleaning up: {self.stage}"
+        stage = self.stage if self.policy_name is None else f"{self.stage} ({self.policy_name})"
+        return self.path, None, f"cleaning up: {stage}"

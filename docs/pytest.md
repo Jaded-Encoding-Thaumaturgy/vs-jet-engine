@@ -52,6 +52,15 @@ def test_with_custom_flags():
     ...
 ```
 
+Use `policies` to run a test with only some of the policies from the [`pytest_vpy_policies`](#custom-policies) hook:
+
+```python
+@pytest.mark.vpy("unique-core", policies=["custom"])
+def test_only_custom(): ...
+```
+
+An unknown policy name is a collection error.
+
 ### Global Configuration
 
 To configure environment creation flags globally for the entire test suite, you can pass the `--vpy-flags` option to `pytest`:
@@ -59,6 +68,51 @@ To configure environment creation flags globally for the entire test suite, you 
 ```bash
 pytest --vpy-flags=4
 ```
+
+`--vpy-flags` only applies to the default policy (`vsengine.pytest.default_policy`).
+Named policies keep their own flags.
+
+## Custom Policies
+
+To use your own policies, implement `pytest_vpy_policies` in a `conftest.py`.
+It returns a mapping of policy names to factories:
+
+```python
+# conftest.py
+import pytest
+import vapoursynth as vs
+
+from vsengine.policy import ContextVarStore, Policy
+from vsengine.pytest import PolicyFactory, default_policy
+
+
+def pytest_vpy_policies(config: pytest.Config, item: pytest.Item) -> dict[str, PolicyFactory]:
+    return {
+        "default": default_policy,
+        "contextvar": lambda: Policy(ContextVarStore(), logger=True),
+        "inspect": lambda: Policy(flags_creation=vs.ENABLE_GRAPH_INSPECTION),
+    }
+```
+
+- A factory takes no arguments and returns a new, **unregistered** `Policy`.
+  The plugin registers and unregisters it.
+- Each test runs once per policy and stage.
+  The policy name is added to the test ID, such as `test_x[initial-core-contextvar]`.
+- The `no-policy` stage runs once, not per policy.
+- The hook result replaces the default policy.
+  Include `default_policy` to keep it.
+- The hook gets the test `item`, so policies can differ per test.
+- The closest `conftest.py` wins.
+
+### Policy Lifecycle
+
+The plugin creates one policy per name and module.
+Tests are grouped by policy, then sorted by stage.
+When the policy changes, the plugin disposes the shared environment and unregisters the old policy.
+Leak detection runs for each group, named `@check-clean-environment[<stage>-<policy>]`.
+
+A named policy can set its own `flags_creation`.
+Use this for custom creation flags in the shared stages.
 
 ## Stages
 
@@ -71,6 +125,7 @@ pytest --vpy-flags=4
 | `unique-core`   | A private environment created and disposed for each individual test.         | Tests that mutate core settings, register custom plugins, or need full isolation.   |
 
 Within a module, tests are sorted by stage in the order above (`no-policy` → `no-core` → `initial-core` → `reloaded-core` → `unique-core`).
+With [custom policies](#custom-policies), the stages are sorted within each policy group.
 
 ## Leak Detection
 
@@ -78,7 +133,8 @@ The plugin checks for dangling VapourSynth core references (objects kept alive a
 
 ### Shared Stages (`initial-core`, `reloaded-core`)
 
-After all tests in a shared stage finish, the plugin appends a synthetic test named `@check-clean-environment[<stage>]`.
+After all tests in a shared stage finish, the plugin appends a synthetic test named `@check-clean-environment[<stage>]`
+(or `@check-clean-environment[<stage>-<policy>]` with custom policies).
 This test disposes the shared environment and queries the internal hospice system.
 If any core reference is still alive, the check fails with:
 
@@ -105,9 +161,21 @@ def test_stage_info(vpy_stage: str) -> None:
     print(f"Running in: {vpy_stage}")  # "initial-core" or "reloaded-core"
 ```
 
+### `vpy_policy_name`
+
+Returns the policy name as a `str`.
+It is `"default"` without the `pytest_vpy_policies` hook, and `None` in the `no-policy` stage.
+
+```python
+@pytest.mark.vpy
+def test_policy_name(vpy_policy_name: str | None) -> None:
+    print(f"Running with: {vpy_policy_name}")
+```
+
 ### `vpy_policy`
 
 Returns the active environment Policy instance managed by the session.
+With custom policies, this is the policy of the current group.
 
 ```python
 from vsengine.policy import Policy
@@ -140,6 +208,7 @@ def test_manual_creation(vpy_env_factory: Callable[[], ManagedEnvironment]) -> N
 
 ## Session Lifecycle
 
-1. **Session start** — A `Policy` is created and registered with VapourSynth.
-2. **Test execution** — The `pytest_runtest_protocol` hook sets up / tears down environments and policies based on each test's stage.
+1. **Session start** — A default `Policy` is registered, so modules can use a core at import time.
+   It does not use `pytest_vpy_policies`, because sub-directory conftests are not loaded yet.
+2. **Test execution** — The `pytest_runtest_protocol` hook sets up / tears down environments and policies based on each test's stage and policy.
 3. **Session finish** — Any remaining environment is disposed and the policy is unregistered, restoring VapourSynth to its default state.
