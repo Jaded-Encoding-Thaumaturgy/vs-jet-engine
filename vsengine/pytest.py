@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Collection, Generator, Mapping
-from contextlib import AbstractContextManager
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, override, runtime_checkable
 
@@ -49,7 +49,7 @@ DEFAULT_ERROR_MESSAGE = (
 policy_key = pytest.StashKey[Policy | None]()
 policy_group_key = pytest.StashKey[tuple[Path, str] | None]()
 env_key = pytest.StashKey[ManagedEnvironment | None]()
-env_ctx_key = pytest.StashKey[AbstractContextManager[None] | None]()
+collect_env_stack_key = pytest.StashKey[ExitStack]()
 stage_key = pytest.StashKey[str]()
 leaked_key = pytest.StashKey[bool]()
 failed_key = pytest.StashKey[bool]()
@@ -143,20 +143,19 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_sessionstart(session: pytest.Session) -> None:
     # https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_sessionstart
     policy = None
-    env = None
-    env_ctx = None
+    collect_stack = ExitStack()
 
     if not vs.has_policy():
         policy = _instantiate_policy(session.config, default_policy, DEFAULT_POLICY_NAME)
         policy.register()
         env = policy.new_environment()
-        env_ctx = env.use()
-        env_ctx.__enter__()
+        collect_stack.enter_context(env)
+        collect_stack.enter_context(env.use())
 
     session.stash[policy_key] = policy
     session.stash[policy_group_key] = None
-    session.stash[env_key] = env
-    session.stash[env_ctx_key] = env_ctx
+    session.stash[env_key] = None
+    session.stash[collect_env_stack_key] = collect_stack
     session.stash[stage_key] = "no-core"
 
 
@@ -168,9 +167,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if not policy.is_registered:
         policy.register()
 
-    if env_ctx := session.stash.get(env_ctx_key, None):
-        env_ctx.__exit__(None, None, None)
-        session.stash[env_ctx_key] = None
+    if collect_stack := session.stash.get(collect_env_stack_key, None):
+        collect_stack.close()
 
     if env := session.stash.get(env_key, None):
         env.dispose()
@@ -216,17 +214,11 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     if config.option.collectonly:
         return
 
-    # Clean up the collection environment and context manager
-    policy = session.stash.get(policy_key, None)
-    env = session.stash.get(env_key, None)
-    env_ctx = session.stash.get(env_ctx_key, None)
+    # Clean up the collection environment
+    if collect_stack := session.stash.get(collect_env_stack_key, None):
+        collect_stack.close()
 
-    if env_ctx:
-        env_ctx.__exit__(None, None, None)
-        session.stash[env_ctx_key] = None
-    if env:
-        env.dispose()
-        session.stash[env_key] = None
+    policy = session.stash.get(policy_key, None)
 
     # Check if any collected item has the vpy marker or uses the vpy_stage parameter
     vpy_items_present = any(
@@ -396,10 +388,7 @@ def pytest_runtest_protocol(
         stage = stage_param
         item.session.stash[stage_key] = stage
 
-    if env:
-        with env.use():
-            yield
-    else:
+    with env.use() if env else nullcontext():
         yield
 
 
@@ -487,8 +476,7 @@ def _ensure_policy_group(item: pytest.Item, policy_name: str | None) -> Policy:
 
     if policy is not None:
         if (env := session.stash.get(env_key, None)) is not None:
-            if not env.disposed:
-                env.dispose()
+            env.dispose()
             session.stash[env_key] = None
         if policy.is_registered:
             policy.unregister()
@@ -541,8 +529,7 @@ def _vpy_env_factory_impl(session: pytest.Session | None = None) -> Generator[Ca
     yield factory
 
     for env in envs:
-        if not env.disposed:
-            env.dispose()
+        env.dispose()
 
 
 class CleanupFailed(TerminalRepr):
