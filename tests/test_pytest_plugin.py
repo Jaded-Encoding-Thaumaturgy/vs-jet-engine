@@ -130,7 +130,6 @@ class MockItem:
     ) -> None:
         self.session = session
         if callspec is not None:
-            # pyrefly: ignore[possibly-uninitialized-attribute]
             self.callspec = callspec
         self.marker = marker
         self.path = path or Path("test.py")
