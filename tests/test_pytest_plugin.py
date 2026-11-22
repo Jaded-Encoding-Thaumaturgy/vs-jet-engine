@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Generator
+from contextlib import ExitStack
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast, override
+from typing import Any, Self, cast, override
 
 import pytest
 import vapoursynth
@@ -129,6 +130,7 @@ class MockItem:
     ) -> None:
         self.session = session
         if callspec is not None:
+            # pyrefly: ignore[possibly-uninitialized-attribute]
             self.callspec = callspec
         self.marker = marker
         self.path = path or Path("test.py")
@@ -181,6 +183,12 @@ class MockEnv:
     def __init__(self) -> None:
         self.disposed = False
         self.used = False
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.dispose()
 
     def dispose(self) -> None:
         self.disposed = True
@@ -397,12 +405,17 @@ def test_pytest_session_hooks(restore_pytest_globals: None, monkeypatch: pytest.
     monkeypatch.setattr(Policy, "register", mock_register)
     monkeypatch.setattr(Policy, "unregister", mock_unregister)
     monkeypatch.setattr(vapoursynth, "has_policy", lambda: False)
-    monkeypatch.setattr(Policy, "new_environment", lambda self: MockEnv())
+    collect_env = MockEnv()
+    monkeypatch.setattr(Policy, "new_environment", lambda self: collect_env)
 
     session = cast(pytest.Session, MockSession())
     vpy_pytest.pytest_sessionstart(session)
     assert session.stash.get(vpy_pytest.policy_key, None) is not None
     assert registered
+    # The collection environment is in use, but it is not the shared environment.
+    assert collect_env.used
+    assert not collect_env.disposed
+    assert session.stash.get(vpy_pytest.env_key, None) is None
 
     mock_env = cast(ManagedEnvironment, MockEnv())
     session.stash[vpy_pytest.env_key] = mock_env
@@ -413,6 +426,8 @@ def test_pytest_session_hooks(restore_pytest_globals: None, monkeypatch: pytest.
     assert session.stash.get(vpy_pytest.policy_key, None) is None
     assert session.stash.get(vpy_pytest.env_key, None) is None
     assert mock_env.disposed
+    # In --collect-only mode, the collection environment is only cleaned up here.
+    assert collect_env.disposed
     assert not mock_policy.registered
 
 
@@ -483,17 +498,28 @@ def test_pytest_collection_modifyitems_cleanup(
 
     mock_env = MockEnv()
     mock_ctx = MockContext(mock_env)
+    disposed_while_entered = list[bool]()
 
-    session.stash[vpy_pytest.env_key] = cast(ManagedEnvironment, mock_env)
-    session.stash[vpy_pytest.env_ctx_key] = mock_ctx
+    def dispose() -> None:
+        disposed_while_entered.append(mock_ctx.status == "entered")
+        mock_env.dispose()
+
+    stack = ExitStack()
+    stack.callback(dispose)
+    stack.enter_context(mock_ctx)
+    session.stash[vpy_pytest.collect_env_stack_key] = stack
 
     items = [MockItem(path=Path("test.py"))]
     vpy_pytest.pytest_collection_modifyitems(session, config_run, items)
 
     assert mock_ctx.status == "exited"
     assert mock_env.disposed
-    assert session.stash.get(vpy_pytest.env_key, None) is None
-    assert session.stash.get(vpy_pytest.env_ctx_key, None) is None
+    # The environment is exited before it is disposed of.
+    assert disposed_while_entered == [False]
+
+    # Closing again (as pytest_sessionfinish does) is a no-op.
+    stack.close()
+    assert disposed_while_entered == [False]
 
 
 def test_pytest_collection_modifyitems_no_vpy_items(
