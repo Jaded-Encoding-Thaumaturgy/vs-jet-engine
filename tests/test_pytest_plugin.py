@@ -255,6 +255,25 @@ def test_vpy_policy_fixture(vpy_policy: Policy, request: pytest.FixtureRequest) 
     assert vpy_policy is request.session.stash[vpy_pytest.policy_key]
 
 
+@pytest.mark.vpy("unique-core")
+def test_vpy_env_fixture_unique_core(vpy_env: ManagedEnvironment | None) -> None:
+    assert vpy_env is not None
+    assert not vpy_env.disposed
+    assert vpy_env.vs_environment == vapoursynth.get_current_environment()
+
+
+@pytest.mark.vpy
+def test_vpy_env_fixture_shared_stages(vpy_env: ManagedEnvironment | None) -> None:
+    assert vpy_env is not None
+    assert not vpy_env.disposed
+    assert vpy_env.vs_environment == vapoursynth.get_current_environment()
+
+
+@pytest.mark.vpy("no-core", "no-policy")
+def test_vpy_env_fixture_no_core(vpy_env: ManagedEnvironment | None) -> None:
+    assert vpy_env is None
+
+
 @pytest.mark.vpy("no-core")
 def test_vpy_env_factory_fixture(vpy_env_factory: Callable[[], ManagedEnvironment]) -> None:
     env = vpy_env_factory()

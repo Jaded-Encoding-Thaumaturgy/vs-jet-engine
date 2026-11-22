@@ -49,6 +49,7 @@ DEFAULT_ERROR_MESSAGE = (
 policy_key = pytest.StashKey[Policy | None]()
 policy_group_key = pytest.StashKey[tuple[Path, str] | None]()
 env_key = pytest.StashKey[ManagedEnvironment | None]()
+item_env_key = pytest.StashKey[ManagedEnvironment]()
 collect_env_stack_key = pytest.StashKey[ExitStack]()
 stage_key = pytest.StashKey[str]()
 leaked_key = pytest.StashKey[bool]()
@@ -95,6 +96,14 @@ def pytest_addhooks(pluginmanager: pytest.PytestPluginManager) -> None:
 def vpy_policy(request: pytest.FixtureRequest) -> Policy:
     """Returns the current VapourSynth environment policy."""
     return _vpy_policy_impl(request.session)
+
+
+@pytest.fixture
+def vpy_env(request: pytest.FixtureRequest) -> ManagedEnvironment | None:
+    """Returns the ManagedEnvironment the test runs in or None in the no-core and no-policy stages."""
+    if (env := request.node.stash.get(item_env_key, None)) is not None:
+        return env
+    return request.session.stash.get(env_key, None)
 
 
 @pytest.fixture
@@ -348,10 +357,12 @@ def pytest_runtest_protocol(
     # Case 1: Isolated run (no stage parameter or unique-core)
     if not is_vpy_stage or stage_param == "unique-core":
         env_unique = policy.new_environment(flags_creation=flags_creation)
+        item.stash[item_env_key] = env_unique
         try:
             with env_unique.use():
                 outcome = yield
         finally:
+            del item.stash[item_env_key]
             env_unique.dispose()
 
         failed = outcome.excinfo[1] if outcome.excinfo else None
